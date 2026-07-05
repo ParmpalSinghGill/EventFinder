@@ -32,6 +32,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 FOLDER = "EventFinder"
 PYEXE = sys.executable                     # the STOCK env python running this
 BAT = os.path.join(BASE, "run_screener.bat")
+MC_BAT = os.path.join(BASE, "run_moneycontrol.bat")
 LOGDIR = os.path.join(BASE, "data", "screener_output")
 STARTUP_DIR = os.path.join(os.environ.get("APPDATA", ""),
                            r"Microsoft\Windows\Start Menu\Programs\Startup")
@@ -47,6 +48,12 @@ def load_times():
     return [str(t) for t in cfg.get("run_times", [])]
 
 
+def load_moneycontrol_times():
+    with open(os.path.join(BASE, "config.yml"), "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    return [str(t) for t in cfg.get("moneycontrol_run_times", [])]
+
+
 def write_bat():
     os.makedirs(LOGDIR, exist_ok=True)
     content = (
@@ -58,6 +65,19 @@ def write_bat():
     with open(BAT, "w", encoding="ascii") as f:
         f.write(content)
     print(f"Wrote launcher: {BAT}")
+
+
+def write_moneycontrol_bat():
+    os.makedirs(LOGDIR, exist_ok=True)
+    content = (
+        "@echo off\r\n"
+        f'cd /d "{BASE}"\r\n'
+        f'"{PYEXE}" "{os.path.join(BASE, "scrape_moneycontrol_stocks.py")}" '
+        f'>> "{os.path.join(LOGDIR, "run_moneycontrol.log")}" 2>&1\r\n'
+    )
+    with open(MC_BAT, "w", encoding="ascii") as f:
+        f.write(content)
+    print(f"Wrote Moneycontrol launcher: {MC_BAT}")
 
 
 def write_startup():
@@ -158,9 +178,9 @@ def delete_all():
         print(("  deleted " if r.returncode == 0 else "  FAILED delete ") + name)
 
 
-def create(name, schedule_args):
+def create(name, schedule_args, target_bat=BAT):
     tn = f"{FOLDER}\\{name}"
-    args = (["/Create", "/TN", tn, "/TR", f'"{BAT}"'] + schedule_args
+    args = (["/Create", "/TN", tn, "/TR", f'"{target_bat}"'] + schedule_args
             + ["/IT", "/F"])
     r = _schtasks(args)
     ok = r.returncode == 0
@@ -196,17 +216,24 @@ def harden_settings():
 
 def install():
     write_bat()
+    write_moneycontrol_bat()
     delete_all()
     remove_startup()
     times = load_times()
+    mc_times = load_moneycontrol_times()
     print(f"Registering logon launcher + {len(times)} timed task(s): {times}")
+    print(f"Registering {len(mc_times)} Moneycontrol task(s): {mc_times}")
     write_startup()
     register_protocol()
     for t in times:
         hhmm = t.replace(":", "")
         # Weekdays only -- markets are closed Sat/Sun, so don't run then.
         create(f"Time_{hhmm}",
-               ["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", t])
+               ["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", t], BAT)
+    for t in mc_times:
+        hhmm = t.replace(":", "")
+        create(f"Moneycontrol_{hhmm}",
+               ["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", t], MC_BAT)
     harden_settings()
     print("\nDone. Current EventFinder tasks:")
     status()

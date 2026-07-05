@@ -38,6 +38,7 @@ htmlcov/
 *.sublime-project
 *.sublime-workspace
 *.code-workspace
+.claude
 
 # Jupyter
 .ipynb_checkpoints

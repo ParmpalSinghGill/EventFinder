@@ -21,6 +21,9 @@ run_times:
   - "14:30"
   - "16:00"   # after-close: full data update + corporate-action resync (no list)
 
+moneycontrol_run_times:
+  - "08:45"   # weekday-only Moneycontrol stocks-to-watch scrape
+
 market:
   tz_offset_minutes: 330      # IST = UTC+05:30
   open: "09:15"
