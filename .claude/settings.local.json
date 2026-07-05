@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Content *)",
+      "PowerShell(conda run *)",
+      "PowerShell(Remove-Item *)",
+      "Bash(ls -R)",
+      "Bash(ls \"C:\\\\Users\\\\parmp\\\\.claude\\\\projects\\\\C--Users-parmp-OneDrive-CODE-Stocks-EventFinder\\\\memory\")",
+      "Bash(conda run *)",
+      "Bash(python -m py_compile scheduler_run.py)",
+      "PowerShell(Get-ScheduledTask *)",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\parmp\\\\OneDrive\\\\CODE\\\\Stocks\\\\EventFinder\"; & \".\\\\open_latest.bat\" \"eventfinder://run\"; Write-Output \"=== exit: $LASTEXITCODE ===\"; Write-Output \"--- run.log tail ---\"; Get-Content \".\\\\data\\\\screener_output\\\\run.log\" -Tail 8)"
+    ]
+  }
+}
