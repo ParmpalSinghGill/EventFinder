@@ -32,9 +32,9 @@ market:
 
 screener:
   target: 20                  # how many stocks to collect
-  tol: 0.02                   # proximity to a level, as a fraction (0.02 = 2%)
-  left: 3
-  right: 2
+  tol: 0.005                   # proximity to a level, as a fraction (0.02 = 2%)
+  left: 2
+  right: 3
   big_mult: 2.0
 
 data:

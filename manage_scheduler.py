@@ -33,6 +33,8 @@ FOLDER = "EventFinder"
 PYEXE = sys.executable                     # the STOCK env python running this
 BAT = os.path.join(BASE, "run_screener.bat")
 MC_BAT = os.path.join(BASE, "run_moneycontrol.bat")
+VBS = os.path.join(BASE, "run_screener.vbs")
+MC_VBS = os.path.join(BASE, "run_moneycontrol.vbs")
 LOGDIR = os.path.join(BASE, "data", "screener_output")
 STARTUP_DIR = os.path.join(os.environ.get("APPDATA", ""),
                            r"Microsoft\Windows\Start Menu\Programs\Startup")
@@ -78,6 +80,18 @@ def write_moneycontrol_bat():
     with open(MC_BAT, "w", encoding="ascii") as f:
         f.write(content)
     print(f"Wrote Moneycontrol launcher: {MC_BAT}")
+
+
+def write_vbs():
+    vbs = f'CreateObject("WScript.Shell").Run """{BAT}""", 0, False\r\n'
+    with open(VBS, "w", encoding="ascii") as f:
+        f.write(vbs)
+    print(f"Wrote silent launcher: {VBS}")
+
+    mc_vbs = f'CreateObject("WScript.Shell").Run """{MC_BAT}""", 0, False\r\n'
+    with open(MC_VBS, "w", encoding="ascii") as f:
+        f.write(mc_vbs)
+    print(f"Wrote silent Moneycontrol launcher: {MC_VBS}")
 
 
 def write_startup():
@@ -178,9 +192,10 @@ def delete_all():
         print(("  deleted " if r.returncode == 0 else "  FAILED delete ") + name)
 
 
-def create(name, schedule_args, target_bat=BAT):
+def create(name, schedule_args, target_vbs=VBS):
     tn = f"{FOLDER}\\{name}"
-    args = (["/Create", "/TN", tn, "/TR", f'"{target_bat}"'] + schedule_args
+    tr = f'wscript.exe "{target_vbs}"'
+    args = (["/Create", "/TN", tn, "/TR", tr] + schedule_args
             + ["/IT", "/F"])
     r = _schtasks(args)
     ok = r.returncode == 0
@@ -217,6 +232,7 @@ def harden_settings():
 def install():
     write_bat()
     write_moneycontrol_bat()
+    write_vbs()
     delete_all()
     remove_startup()
     times = load_times()
@@ -227,13 +243,12 @@ def install():
     register_protocol()
     for t in times:
         hhmm = t.replace(":", "")
-        # Weekdays only -- markets are closed Sat/Sun, so don't run then.
         create(f"Time_{hhmm}",
-               ["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", t], BAT)
+               ["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", t], VBS)
     for t in mc_times:
         hhmm = t.replace(":", "")
         create(f"Moneycontrol_{hhmm}",
-               ["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", t], MC_BAT)
+               ["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", t], MC_VBS)
     harden_settings()
     print("\nDone. Current EventFinder tasks:")
     status()

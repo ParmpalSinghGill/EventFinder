@@ -410,6 +410,105 @@ def build_and_notify(cfg, now):
     print(f"List run #{run_n}: {len(cur)} stocks, {len(new_syms)} new -> {latest_html}")
 
 
+def inject_battery_banner(cfg, uri):
+    """Prepend a battery warning banner to latest.html (creating it if missing)
+    so the user can click 'Run Now' from the HTML page."""
+    outdir = _abs(cfg["output"]["dir"])
+    os.makedirs(outdir, exist_ok=True)
+    latest_html = os.path.join(outdir, "latest.html")
+
+    banner_html = (
+        f'<div class="battery-banner" style="background:#fff3cd; color:#856404; '
+        f'padding:12px 16px; border:1px solid #ffeeba; margin:15px 0; border-radius:6px; '
+        f'font-size:14px; display:flex; align-items:center; justify-content:space-between; '
+        f'box-shadow: 0 2px 4px rgba(0,0,0,0.05); font-family:\'Segoe UI\',Arial,sans-serif;">\n'
+        f'  <span>&#9888; <strong>Running on Battery:</strong> The scheduled run was skipped to save power.</span>\n'
+        f'  <a class="btn" href="{uri}" style="background:#856404; color:#fff; padding:6px 12px; '
+        f'border-radius:4px; text-decoration:none; font-weight:bold; font-size:13px; '
+        f'margin-left:15px; display:inline-block;">Run EventFinder Now</a>\n'
+        f'</div>'
+    )
+
+    if os.path.exists(latest_html):
+        with open(latest_html, "r", encoding="utf-8") as f:
+            content = f.read()
+        # If the banner is already present, do nothing to avoid duplicate banners
+        if 'class="battery-banner"' in content:
+            return
+
+        # Insert the banner right after the <body> tag
+        body_idx = content.find("<body>")
+        if body_idx != -1:
+            insert_pos = body_idx + len("<body>")
+            new_content = content[:insert_pos] + "\n" + banner_html + content[insert_pos:]
+            with open(latest_html, "w", encoding="utf-8") as f:
+                f.write(new_content)
+    else:
+        # Create a new minimal latest.html with the banner
+        minimal_html = (
+            f'<!doctype html><html><head><meta charset="utf-8"><title>EventFinder list</title>\n'
+            f'<style>\n'
+            f'body{{font-family:\'Segoe UI\',Arial;margin:24px;color:#222}}\n'
+            f'.btn{{display:inline-block;background:#1f6feb;color:#fff;text-decoration:none;'
+            f'border:0;border-radius:5px;padding:7px 12px;font-size:13px;cursor:pointer}}\n'
+            f'.btn:hover{{background:#1a5fd0}}\n'
+            f'</style></head>\n'
+            f'<body>\n'
+            f'{banner_html}\n'
+            f'<h2>EventFinder</h2>\n'
+            f'<p>No recent data available because the run was deferred on battery.</p>\n'
+            f'</body></html>\n'
+        )
+        with open(latest_html, "w", encoding="utf-8") as f:
+            f.write(minimal_html)
+
+
+def check_and_run_moneycontrol(cfg, now):
+    """If today is a weekday, current time is after 8:45 AM, and today's
+    Moneycontrol file MC_YYYYMMDD.txt does not exist (or contains a failure notice),
+    run the scraper catch-up."""
+    # Only weekdays (Mon-Fri)
+    if now.weekday() >= 5:
+        return
+    # Only after 8:45 AM
+    if now.hour < 8 or (now.hour == 8 and now.minute < 45):
+        return
+
+    import sys
+    outdir = _abs(cfg["output"]["dir"])
+    stamp = now.strftime("%Y%m%d")
+    mc_file = os.path.join(outdir, f"MC_{stamp}.txt")
+
+    should_run = False
+    if not os.path.exists(mc_file):
+        should_run = True
+    else:
+        # If the file exists but represents a failed scrape (e.g. no internet connection on boot),
+        # allow retrying on subsequent scheduler runs.
+        try:
+            with open(mc_file, "r", encoding="utf-8") as f:
+                first_line = f.readline()
+            if "failed" in first_line.lower() or "error" in first_line.lower():
+                should_run = True
+        except Exception:
+            pass
+
+    if should_run:
+        print(f"Moneycontrol file MC_{stamp}.txt missing or failed for today. Running scraper catch-up...")
+        py_exe = sys.executable
+        script_path = os.path.join(BASE, "scrape_moneycontrol_stocks.py")
+        try:
+            log_path = os.path.join(outdir, "run_moneycontrol.log")
+            with open(log_path, "a", encoding="utf-8") as log_f:
+                log_f.write(f"\n--- Catch-up run triggered by scheduler_run at {now.strftime('%Y-%m-%d %H:%M:%S')} IST ---\n")
+                log_f.flush()
+                # Run the scraper with no date argument so it scrapes for today.
+                subprocess.run([py_exe, script_path], stdout=log_f, stderr=log_f)
+            print("Moneycontrol scraper catch-up completed.")
+        except Exception as e:
+            print(f"Error running Moneycontrol scraper catch-up: {e}")
+
+
 # --------------------------------------------------------------------------- #
 def main():
     p = argparse.ArgumentParser(description="One scheduled EventFinder run.")
@@ -425,6 +524,9 @@ def main():
     cfg = load_config(args.config)
     tz = timezone(timedelta(minutes=cfg["market"]["tz_offset_minutes"]))
     now = datetime.now(tz)
+
+    # Automatically check and catch up on Moneycontrol scraper if needed
+    check_and_run_moneycontrol(cfg, now)
 
     if args.eod:
         phase = "eod"
@@ -449,6 +551,7 @@ def main():
                    action=("Run now", uri))
             print(f"EventFinder @ {now.strftime('%Y-%m-%d %H:%M')} IST: on battery "
                   f"-- deferred ({phase}); sent 'Run now' prompt.")
+            inject_battery_banner(cfg, uri)
             return
 
     print("=" * 70)

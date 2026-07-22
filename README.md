@@ -69,6 +69,15 @@ conda run -n STOCK python manage_scheduler.py install
 After step 3 it runs by itself. The list opens from the notification, or from
 `data\screener_output\latest.html`.
 
+If you edit `config.yml` after the initial setup, re-apply it with:
+
+```powershell
+conda run -n STOCK python manage_scheduler.py restart
+```
+
+This is especially important when you change scheduler-related values such as
+`run_times` or `moneycontrol_run_times`.
+
 ---
 
 ## Data: download & update

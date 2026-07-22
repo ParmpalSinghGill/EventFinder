@@ -159,6 +159,17 @@ def parse_target_date(value: str | None) -> datetime:
     raise ValueError("Date must be YYYY-MM-DD, YYYYMMDD, DD/MM, DD/MM/YY, or DD month name")
 
 
+def is_article_candidate_link(href: str) -> bool:
+    low = (href or "").strip().lower()
+    if not low or "/news/" not in low:
+        return False
+    if "moneycontrol.com/news/tags/" in low:
+        return False
+    if low.endswith("/"):
+        return False
+    return ".html" in low or "/videos/" in low or "/photos/" in low or "/blogs/" in low
+
+
 def find_first_article_link(html: str) -> str | None:
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):
@@ -166,14 +177,19 @@ def find_first_article_link(html: str) -> str | None:
         text = " ".join(a.stripped_strings).strip()
         if not href or not text:
             continue
-        low = href.lower()
-        if "/news/" in low and not low.startswith("http://") and not low.startswith("https://www.moneycontrol.com/news/tags/"):
+        if is_article_candidate_link(href):
             return href
     return None
 
 
 def find_article_link_for_date(html: str, target_dt: datetime) -> str | None:
     soup = BeautifulSoup(html, "html.parser")
+    day = target_dt.strftime("%d")
+    day_no_zero = day.lstrip("0") or "0"
+    month_names = {
+        target_dt.strftime("%B").lower(),
+        target_dt.strftime("%b").lower(),
+    }
     date_tokens = {
         target_dt.strftime("%d %B"),
         target_dt.strftime("%d %b"),
@@ -181,27 +197,26 @@ def find_article_link_for_date(html: str, target_dt: datetime) -> str | None:
         target_dt.strftime("%d-%b").lower(),
         target_dt.strftime("%d/%m"),
         target_dt.strftime("%d-%m"),
-        target_dt.strftime("%d"),
-        target_dt.strftime("%d" ).lstrip("0"),
+        day,
+        day_no_zero,
     }
-    month_tokens = {
-        target_dt.strftime("%B").lower(),
-        target_dt.strftime("%b").lower(),
-    }
+    date_tokens.update({f"{day} {month}" for month in month_names})
+    date_tokens.update({f"{day_no_zero} {month}" for month in month_names})
+    date_tokens.update({f"{day}-{month}" for month in month_names})
+    date_tokens.update({f"{day_no_zero}-{month}" for month in month_names})
+    date_tokens.update({f"{day}/{month}" for month in month_names})
+    date_tokens.update({f"{day_no_zero}/{month}" for month in month_names})
     for a in soup.find_all("a", href=True):
         href = a.get("href", "")
         text = " ".join(a.stripped_strings).strip()
         if not href or not text:
             continue
-        low = href.lower()
-        if "/news/" not in low:
-            continue
-        if low.startswith("http://") or low.startswith("https://www.moneycontrol.com/news/tags/"):
+        if not is_article_candidate_link(href):
             continue
         combined = f"{text} {href}".lower()
         has_day_month = any(token.lower() in combined for token in date_tokens if " " in token or "-" in token or "/" in token)
-        has_month_only = any(token in combined for token in month_tokens)
-        if has_day_month or (target_dt.strftime("%d") in combined and has_month_only):
+        has_month_only = any(token in combined for token in month_names)
+        if has_day_month or (day in combined and has_month_only) or (day_no_zero in combined and has_month_only):
             return href
     return find_first_article_link(html)
 
@@ -238,7 +253,45 @@ def extract_article_text(html: str) -> str:
     return "\n".join(blocks)
 
 
-def export_fyers_watchlist(symbols: List[str], target_dt: datetime) -> None:
+def build_manual_review_text(article_title: str, article_link: str, symbols: List[str], missing_names: List[str]) -> str:
+    lines = []
+    if article_title:
+        lines.append(article_title)
+    lines.append("")
+    lines.append("Read More:")
+    if article_link:
+        lines.append(article_link)
+    if symbols:
+        lines.append("")
+        lines.append("Mapped tickers:")
+        lines.append(",".join(symbols))
+    if missing_names:
+        lines.append("")
+        lines.append("No ticker found:")
+        lines.append("\n".join(missing_names))
+    return "\n".join(lines)
+
+
+def write_failure_outputs(out_dir: Path, target_dt: datetime, error_text: str) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = target_dt.strftime("%Y%m%d")
+    review_path = out_dir / f"MC_review_{stamp}.txt"
+    latest_review_path = out_dir / "latest_MC_review.txt"
+    missing_path = out_dir / f"MC_missing_{stamp}.txt"
+    latest_missing_path = out_dir / "latest_MC_missing.txt"
+    missing_csv_path = out_dir / f"MC_missing_{stamp}.csv"
+    latest_missing_csv_path = out_dir / "latest_MC_missing.csv"
+
+    review_text = f"Moneycontrol scrape failed.\n\nError:\n{error_text}"
+    review_path.write_text(review_text, encoding="utf-8")
+    latest_review_path.write_text(review_text, encoding="utf-8")
+    missing_path.write_text("", encoding="utf-8")
+    latest_missing_path.write_text("", encoding="utf-8")
+    missing_csv_path.write_text("Name\n", encoding="utf-8")
+    latest_missing_csv_path.write_text("Name\n", encoding="utf-8")
+
+
+def export_fyers_watchlist(symbols: List[str], target_dt: datetime, article_title: str, article_link: str, missing_names: List[str]) -> None:
     export_dir = Path(os.path.expanduser(r"~\Downloads\Watchlist"))
     export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -248,14 +301,31 @@ def export_fyers_watchlist(symbols: List[str], target_dt: datetime) -> None:
     csv_path = export_dir / f"MC_fyers_{stamp}.csv"
     latest_txt_path = export_dir / "latest_MC_fyers.txt"
     latest_csv_path = export_dir / "latest_MC_fyers.csv"
+    review_txt_path = export_dir / f"MC_review_{stamp}.txt"
+    review_latest_txt_path = export_dir / "latest_MC_review.txt"
+    missing_txt_path = export_dir / f"MC_missing_{stamp}.txt"
+    missing_latest_txt_path = export_dir / "latest_MC_missing.txt"
+    missing_csv_path = export_dir / f"MC_missing_{stamp}.csv"
+    missing_latest_csv_path = export_dir / "latest_MC_missing.csv"
+
+    review_text = build_manual_review_text(article_title, article_link, symbols, missing_names)
+    missing_text = "\n".join(missing_names)
 
     txt_path.write_text(",".join(fyers_symbols), encoding="ascii")
     csv_path.write_text("Symbol\n" + "\n".join(fyers_symbols), encoding="ascii")
     latest_txt_path.write_text(",".join(fyers_symbols), encoding="ascii")
     latest_csv_path.write_text("Symbol\n" + "\n".join(fyers_symbols), encoding="ascii")
+    review_txt_path.write_text(review_text, encoding="utf-8")
+    review_latest_txt_path.write_text(review_text, encoding="utf-8")
+    missing_txt_path.write_text(missing_text, encoding="utf-8")
+    missing_latest_txt_path.write_text(missing_text, encoding="utf-8")
+    missing_csv_path.write_text("Name\n" + "\n".join(missing_names), encoding="utf-8")
+    missing_latest_csv_path.write_text("Name\n" + "\n".join(missing_names), encoding="utf-8")
 
     print(f"Exported Fyers watchlist -> {txt_path}")
     print(f"Exported Fyers CSV -> {csv_path}")
+    print(f"Exported review text -> {review_txt_path}")
+    print(f"Exported missing names -> {missing_txt_path}")
 
 
 def main() -> None:
@@ -264,48 +334,66 @@ def main() -> None:
     args = parser.parse_args()
 
     target_dt = parse_target_date(args.date)
+
+    # Skip weekends if running scheduled (auto) mode (i.e. no explicit date passed)
+    if not args.date and target_dt.weekday() >= 5:
+        print(f"Moneycontrol @ {target_dt.strftime('%Y-%m-%d')}: weekend, skipping scrape.")
+        return
+
     OUTDIR.mkdir(parents=True, exist_ok=True)
     print(f"Parsed date: {target_dt.strftime('%Y-%m-%d')}")
 
-    response = requests.get(URL, headers=HEADERS, timeout=30)
-    response.raise_for_status()
+    try:
+        response = requests.get(URL, headers=HEADERS, timeout=30)
+        response.raise_for_status()
 
-    first_link = find_article_link_for_date(response.text, target_dt)
-    if not first_link:
-        raise RuntimeError("Could not find a suitable article link on the page")
+        first_link = find_article_link_for_date(response.text, target_dt)
+        if not first_link:
+            raise RuntimeError("Could not find a suitable article link on the page")
 
-    article_response = requests.get(first_link, headers=HEADERS, timeout=30)
-    article_response.raise_for_status()
+        article_response = requests.get(first_link, headers=HEADERS, timeout=30)
+        article_response.raise_for_status()
 
-    catalog = load_catalog()
-    article_title = extract_article_title(article_response.text)
-    mapped_pairs = find_symbols_from_text(article_title, catalog)
-    symbols = [ticker for _, ticker in mapped_pairs if ticker]
-    symbol = symbols[-1] if symbols else ""
-    ticker_text = ",".join(symbols)
+        catalog = load_catalog()
+        article_title = extract_article_title(article_response.text)
+        mapped_pairs = find_symbols_from_text(article_title, catalog)
+        symbols = [ticker for _, ticker in mapped_pairs if ticker]
+        missing_names = [name for name, ticker in mapped_pairs if not ticker]
+        symbol = symbols[-1] if symbols else ""
+        ticker_text = ",".join(symbols)
 
-    stamp = target_dt.strftime("%Y%m%d")
-    out_path = OUTDIR / f"MC_{stamp}.txt"
-    latest_path = OUTDIR / "latest_mc.txt"
+        stamp = target_dt.strftime("%Y%m%d")
+        out_path = OUTDIR / f"MC_{stamp}.txt"
+        latest_path = OUTDIR / "latest_mc.txt"
 
-    with out_path.open("w", encoding="utf-8") as f:
-        f.write(ticker_text)
-    with latest_path.open("w", encoding="utf-8") as f:
-        f.write(ticker_text)
+        review_text = build_manual_review_text(article_title, first_link, symbols, missing_names)
+        with out_path.open("w", encoding="utf-8") as f:
+            f.write(review_text)
+        with latest_path.open("w", encoding="utf-8") as f:
+            f.write(review_text)
 
-    export_fyers_watchlist(symbols, target_dt)
+        export_fyers_watchlist(symbols, target_dt, article_title, first_link, missing_names)
 
-    print(f"First article link: {first_link}")
-    print(f"Original page title: {article_title}")
-    print("\n\n","*"*50)
-    print("Mapped name -> ticker pairs:")
-    for name, ticker in mapped_pairs:
-        print(f"  - {name} -> {ticker or '<NO MATCH>'}")
-    print(f"\nTicker list: {symbols}")
-    print(f"Selected last symbol: {symbol}")
-    print(f"Full ticker list written: {symbols}")
-    print(f"Saved -> {out_path}")
-    print(f"Latest -> {latest_path}")
+        print(f"First article link: {first_link}")
+        print(f"Original page title: {article_title}")
+        print("\n\n","*"*50)
+        print("Mapped name -> ticker pairs:")
+        for name, ticker in mapped_pairs:
+            print(f"  - {name} -> {ticker or '<NO MATCH>'}")
+        print(f"\nTicker list: {symbols}")
+        print(f"Selected last symbol: {symbol}")
+        print(f"Full ticker list written: {symbols}")
+        print(f"Saved -> {out_path}")
+        print(f"Latest -> {latest_path}")
+    except Exception as exc:  # pragma: no cover - defensive batch-run behavior
+        stamp = target_dt.strftime("%Y%m%d")
+        out_path = OUTDIR / f"MC_{stamp}.txt"
+        latest_path = OUTDIR / "latest_mc.txt"
+        out_path.write_text(f"Moneycontrol scrape failed.\nError: {exc}", encoding="utf-8")
+        latest_path.write_text(f"Moneycontrol scrape failed.\nError: {exc}", encoding="utf-8")
+        write_failure_outputs(Path(os.path.expanduser(r"~\Downloads\Watchlist")), target_dt, str(exc))
+        print(f"Moneycontrol scrape failed: {exc}")
+        print(f"Saved failure notice -> {out_path}")
 
 
 if __name__ == "__main__":
