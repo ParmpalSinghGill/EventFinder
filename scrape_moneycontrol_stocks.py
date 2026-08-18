@@ -22,6 +22,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from ticker_mapping import find_symbols_from_text, load_catalog
+import watchlist_utils
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
@@ -290,9 +291,12 @@ def write_failure_outputs(out_dir: Path, target_dt: datetime, error_text: str) -
     missing_csv_path.write_text("Name\n", encoding="utf-8")
     latest_missing_csv_path.write_text("Name\n", encoding="utf-8")
 
+    # Sync and clean
+    watchlist_utils.sync_and_clean_watchlist("latest_MC_missing.txt", "")
+
 
 def export_fyers_watchlist(symbols: List[str], target_dt: datetime, article_title: str, article_link: str, missing_names: List[str]) -> None:
-    export_dir = Path(os.path.expanduser(r"~\Downloads\Watchlist"))
+    export_dir = Path(watchlist_utils.get_export_dir())
     export_dir.mkdir(parents=True, exist_ok=True)
 
     fyers_symbols = [f"NSE:{symbol}-EQ" for symbol in symbols]
@@ -321,6 +325,10 @@ def export_fyers_watchlist(symbols: List[str], target_dt: datetime, article_titl
     missing_latest_txt_path.write_text(missing_text, encoding="utf-8")
     missing_csv_path.write_text("Name\n" + "\n".join(missing_names), encoding="utf-8")
     missing_latest_csv_path.write_text("Name\n" + "\n".join(missing_names), encoding="utf-8")
+
+    # Sync only latest_MC_fyers.txt and latest_MC_missing.txt to ~/Downloads/Watchlist, and clean up.
+    watchlist_utils.sync_and_clean_watchlist("latest_MC_fyers.txt", ",".join(fyers_symbols))
+    watchlist_utils.sync_and_clean_watchlist("latest_MC_missing.txt", missing_text)
 
     print(f"Exported Fyers watchlist -> {txt_path}")
     print(f"Exported Fyers CSV -> {csv_path}")
@@ -391,7 +399,7 @@ def main() -> None:
         latest_path = OUTDIR / "latest_mc.txt"
         out_path.write_text(f"Moneycontrol scrape failed.\nError: {exc}", encoding="utf-8")
         latest_path.write_text(f"Moneycontrol scrape failed.\nError: {exc}", encoding="utf-8")
-        write_failure_outputs(Path(os.path.expanduser(r"~\Downloads\Watchlist")), target_dt, str(exc))
+        write_failure_outputs(Path(watchlist_utils.get_export_dir()), target_dt, str(exc))
         print(f"Moneycontrol scrape failed: {exc}")
         print(f"Saved failure notice -> {out_path}")
 

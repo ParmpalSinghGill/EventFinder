@@ -34,6 +34,7 @@ import yaml
 import screen_levels
 import update_nse_daily as daily
 import update_nse_hourly as hourly
+import watchlist_utils
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 NO_DISCREPANCY_TOL = 1e9      # effectively disables the corporate-action resync
@@ -46,7 +47,28 @@ def _abs(path):
 
 def load_config(path="config.yml"):
     with open(_abs(path), "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f) or {}
+
+    # Merge dynamic event_config.json if present
+    json_path = os.path.join(BASE, "data", "gold_xauusd", "event_config.json")
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r") as jf:
+                evt_conf = json.load(jf)
+                if "event_finder" not in cfg:
+                    cfg["event_finder"] = {}
+                cfg["event_finder"].update(evt_conf)
+        except Exception:
+            pass
+
+    # Override notification setting based on show_stock_events
+    if "event_finder" in cfg:
+        show_stock = cfg["event_finder"].get("show_stock_events", True)
+        if "output" in cfg:
+            cfg["output"]["notify"] = bool(show_stock)
+
+    return cfg
+
 
 
 def _parse_hhmm(s):
@@ -316,11 +338,16 @@ def write_fyers(export_dir, df, stamp, prefix=(), new_syms=()):
     for path, data in targets:
         with open(path, "w", encoding="ascii") as f:
             f.write(data)
+
+    # Sync only latest_fyers.txt and latest_fyers_new.txt to ~/Downloads/Watchlist, and clean up.
+    watchlist_utils.sync_and_clean_watchlist("latest_fyers.txt", line)
+    watchlist_utils.sync_and_clean_watchlist("latest_fyers_new.txt", new_line)
+
     return export_dir
 
 
 def _export_dir(cfg):
-    return os.path.expanduser(cfg["output"].get("export_dir", "~/Downloads/Watchlist"))
+    return watchlist_utils.get_export_dir()
 
 
 def _write_outputs(outdir, df, new_syms, run_n, ts, prefix=(), export_dir=None):
@@ -394,13 +421,23 @@ def build_and_notify(cfg, now):
 
     if cfg["output"].get("notify", True):
         if run_n == 1:
-            notify("EventFinder: stock list ready",
-                   f"{len(cur)} stocks near key levels")
+            if cur:
+                notify("EventFinder: Stock List Ready",
+                       f"{len(cur)} stock(s) near key levels")
+            else:
+                notify("EventFinder: Stock Scan Complete",
+                       "No stocks near key levels at this time")
         else:
-            preview = ", ".join(new_syms[:8]) + ("…" if len(new_syms) > 8 else "")
-            head = (f"{len(new_syms)} NEW: {preview}" if new_syms
-                    else "No new stocks")
-            notify(f"EventFinder: {head}", f"Full list {len(cur)} stocks")
+            if new_syms:
+                preview = ", ".join(new_syms[:8]) + ("…" if len(new_syms) > 8 else "")
+                notify(f"EventFinder: {len(new_syms)} NEW stock(s)",
+                       f"New: {preview} (Total: {len(cur)})")
+            elif cur:
+                notify("EventFinder: Stock Scan Complete",
+                       f"No new stocks since last run. {len(cur)} stock(s) active.")
+            else:
+                notify("EventFinder: Stock Scan Complete",
+                       "No stocks near key levels at this time")
 
     if cfg["output"].get("auto_open", False):
         try:
@@ -522,7 +559,14 @@ def main():
     args = p.parse_args()
 
     cfg = load_config(args.config)
+    
+    # Check web dashboard configuration for stock event finder
+    if "event_finder" in cfg and not cfg["event_finder"].get("run_stock_event_finder", True):
+        print("Stock Event Finder is DISABLED in configuration (run_stock_event_finder = False). Skipping.")
+        return
+
     tz = timezone(timedelta(minutes=cfg["market"]["tz_offset_minutes"]))
+
     now = datetime.now(tz)
 
     # Automatically check and catch up on Moneycontrol scraper if needed

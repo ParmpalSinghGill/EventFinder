@@ -13,6 +13,8 @@ from datetime import datetime
 import pandas as pd
 import yaml
 
+import watchlist_utils
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -23,14 +25,13 @@ def _abs(p):
 def main():
     outdir = _abs("data/screener_output")
     prefix = []
-    export_dir = os.path.expanduser("~/Downloads/Watchlist")
+    export_dir = watchlist_utils.get_export_dir()
     cfg_path = os.path.join(BASE, "config.yml")
     if os.path.exists(cfg_path):
         with open(cfg_path, encoding="utf-8") as f:
             out = yaml.safe_load(f).get("output", {})
         outdir = _abs(out.get("dir", outdir))
         prefix = out.get("watchlist_prefix", []) or []
-        export_dir = os.path.expanduser(out.get("export_dir", export_dir))
 
     latest = os.path.join(outdir, "latest.csv")
     if not os.path.exists(latest):
@@ -52,6 +53,10 @@ def main():
         f.write(",".join(syms))
     with open(os.path.join(export_dir, "latest_fyers.csv"), "w", encoding="ascii") as f:
         f.write("Symbol\n" + "\n".join(syms))
+    
+    # Also write to ~/Downloads/Watchlist and clean up
+    watchlist_utils.sync_and_clean_watchlist("latest_fyers.txt", ",".join(syms))
+
     print(f"Exported {len(syms)} symbols ->\n  {txt}\n  {csv}")
     try:
         os.startfile(export_dir)                        # show the folder

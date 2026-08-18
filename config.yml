@@ -1,62 +1,49 @@
-# ===========================================================================
-# EventFinder schedule + screener configuration.
-#
-# After editing ANY value here (especially run_times), re-apply it with:
-#     conda run -n STOCK python manage_scheduler.py restart
-# That re-registers the Windows scheduled tasks so the change takes effect
-# TODAY (if the new time hasn't passed yet) and on every following day.
-# ===========================================================================
-
-# Times of day (IST, 24-hour HH:MM) to run. Add or remove as many as you like.
-#   * A run DURING market hours  -> quick data update (no discrepancy check)
-#                                   + build the stock list + notify.
-#   * A run AFTER market close    -> full data update WITH discrepancy check
-#                                   (keeps data correct); NO list is built.
-run_times:
-  - "09:30"
-  - "10:30"
-  - "11:30"
-  - "12:30"
-  - "13:30"
-  - "14:30"
-  - "16:00"   # after-close: full data update + corporate-action resync (no list)
-
-moneycontrol_run_times:
-  - "08:45"   # weekday-only Moneycontrol stocks-to-watch scrape
-
+data:
+  base_dir: data
+  daily_dir: data/nse_daily
+  eod_tol: 0.001
+  hourly_dir: data/nse_hourly
+  intraday_universe_list: ind_nifty200list.csv
+  overlap_days: 2
+  update_hourly_eod: false
+  update_hourly_intraday: false
+  workers: 8
+event_finder:
+  gold_trigger_tol: 0.002
+  run_gold_event_finder: true
+  run_stock_event_finder: true
+  show_gold_events: true
+  show_stock_events: true
 market:
-  tz_offset_minutes: 330      # IST = UTC+05:30
-  open: "09:15"
-  close: "15:30"
-  trading_days_only: true     # treat Sat/Sun as "no list" (data update only)
-
+  close: '15:30'
+  open: 09:15
+  trading_days_only: true
+  tz_offset_minutes: 330
+moneycontrol_run_times:
+- 08:45
+output:
+  auto_open: false
+  dir: data/screener_output
+  export_dir: C:/DATA/CODE/Stocks/EventFinder/Results
+  notify: true
+  watchlist_prefix:
+  - NSE:NIFTY50-INDEX
+  - BSE:SENSEX-INDEX
+run_times:
+- 09:30
+- '10:30'
+- '11:30'
+- '12:30'
+- '13:30'
+- '14:30'
+- '16:00'
 screener:
-  target: 20                  # how many stocks to collect
-  tol: 0.005                   # proximity to a level, as a fraction (0.02 = 2%)
+  big_mult: 2.0
   left: 2
   right: 3
-  big_mult: 2.0
-
-data:
-  daily_dir: "data/nse_daily"
-  hourly_dir: "data/nse_hourly"
-  base_dir: "data"
-  workers: 8
-  overlap_days: 2                 # daily incremental re-fetch overlap (business days)
-  # Universe refreshed quickly during market hours (the screener's widest tier).
-  intraday_universe_list: "ind_nifty200list.csv"
-  update_hourly_intraday: false   # hourly off for now
-  update_hourly_eod: false        # hourly off for now (flip to true to maintain it)
-  eod_tol: 0.001                  # per-ticker resync threshold (corporate actions);
-                                   # a mismatch beyond this re-downloads ONLY that ticker
-
-output:
-  dir: "data/screener_output"     # lists, diffs, state and run.log land here
-  notify: true                    # show a Windows notification on each list run
-  auto_open: false                # also pop latest.html open automatically each
-                                   # list run (true) vs only when you click the toast
-  watchlist_prefix:               # always pinned at the TOP of every Fyers watchlist
-    - "NSE:NIFTY50-INDEX"
-    - "BSE:SENSEX-INDEX"
-  export_dir: "~/Downloads/Watchlist"   # where Fyers watchlist files are saved
-                                        # (latest_fyers.* + dated fyers_<stamp>.*)
+  target: 20
+  tol: 0.005
+telegram:
+  bot_token: 8952946545:AAFLYnADSfcF7PEwkpLPh-0oOj4Md1bIExE
+  chat_id: '406879558'
+  enable_telegram: true
