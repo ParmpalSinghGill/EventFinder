@@ -9,11 +9,11 @@ import os
 import sys
 from datetime import datetime
 import pandas as pd
-import yfinance as yf
 import yaml
 
 # Import exact stock label engine
 sys.path.append(os.getcwd())
+from coindcx_gold import COINDCX_PAIR, fetch_latest_data as fetch_coindcx_gold
 from find_labels import (find_labels, nearest_levels, to_2yearly, to_monthly,
                          to_weekly, to_yearly)
 
@@ -22,7 +22,7 @@ CONFIG_YML = "config.yml"
 CONFIG_JSON = os.path.join("data", "gold_xauusd", "event_config.json")
 COINDCX_URL = "https://coindcx.com/futures/B-XAU_USDT"
 
-TICKER_SYMBOL = "PAXG-USD"   # Spot Gold rate (matches CoinDCX & TradingView Spot XAUUSD)
+TICKER_SYMBOL = COINDCX_PAIR  # CoinDCX gold futures (B-XAU_USDT / XAUUSDT)
 DATA_DIR = os.path.join("data", "gold_xauusd")
 DAILY_CSV = os.path.join(DATA_DIR, "gold_spot_xauusd_1d.csv")
 MINUTE_CSV = os.path.join(DATA_DIR, "gold_spot_xauusd_1m_today.csv")
@@ -72,22 +72,8 @@ def load_dynamic_config() -> dict:
 
 
 def fetch_latest_data():
-    """Fetch updated Daily and Intraday 1-minute Spot Gold data."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    
-    df_daily = yf.download(TICKER_SYMBOL, period="max", interval="1d", progress=False)
-    if isinstance(df_daily.columns, pd.MultiIndex):
-        df_daily.columns = df_daily.columns.get_level_values(0)
-    df_daily.reset_index(inplace=True)
-    df_daily.to_csv(DAILY_CSV, index=False)
-
-    df_1m = yf.download(TICKER_SYMBOL, period="1d", interval="1m", progress=False)
-    if isinstance(df_1m.columns, pd.MultiIndex):
-        df_1m.columns = df_1m.columns.get_level_values(0)
-    df_1m.reset_index(inplace=True)
-    df_1m.to_csv(MINUTE_CSV, index=False)
-    
-    return df_daily, df_1m
+    """Fetch CoinDCX B-XAU_USDT daily history and last 24h of 1-minute bars."""
+    return fetch_coindcx_gold(save=True)
 
 
 def compute_stock_screener_levels(df_daily: pd.DataFrame, df_1m: pd.DataFrame, current_price: float) -> list:
@@ -208,9 +194,10 @@ def run_event_finder():
         return
 
     print("\n" + "=" * 75)
-    print(f" SPOT XAU/USD EVENT FINDER (ACTIVE MONITOR)")
+    print(f" COINDCX XAUUSDT EVENT FINDER (ACTIVE MONITOR)")
+    print(f" Feed: {TICKER_SYMBOL}  (public candles, no API key)")
     print(f" Mode: {'VERBOSE / SHOW ALERTS' if show_events else 'SILENT / BACKGROUND LOGGING ONLY'}")
-    print(f" Proximity Tolerance: {trigger_tol * 100:.2f}% (${trigger_tol})")
+    print(f" Proximity Tolerance: {trigger_tol * 100:.2f}%")
     print(f" CoinDCX Trade Link: {COINDCX_URL}")
     print(f" Timestamp (Local): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 75)
@@ -225,7 +212,7 @@ def run_event_finder():
     current_price = float(latest_row["Close"])
     current_time_str = str(latest_row[dt_col])
 
-    print(f"\n Current Spot Gold Price: ${current_price:,.2f} USD")
+    print(f"\n Current CoinDCX XAUUSDT: ${current_price:,.2f}")
     print(f" Latest Data Timestamp: {current_time_str}")
 
     levels = compute_stock_screener_levels(df_daily, df_1m, current_price)
@@ -276,6 +263,16 @@ def run_event_finder():
                     print(f"  [Telegram Event Alert Warning]: {te}")
 
                 if show_events:
+                    # Send Windows System Desktop Toast Notification
+                    try:
+                        from scheduler_run import notify
+                        notify(
+                            "🎯 GOLD LEVEL EVENT TRIGGERED!",
+                            f"{lname} ({ltf}) @ ${lprice:,.2f} | Spot: ${current_price:,.2f} ({pct_dist*100:.2f}% gap)"
+                        )
+                    except Exception as ne:
+                        print(f"  [System Toast Alert Warning]: {ne}")
+
                     print(f"  *** [EVENT TRIGGERED] *** Price ${current_price:,.2f} is within {pct_dist*100:.2f}% of {lname} (${lprice:,.2f})!")
                     print(f"      -> Trade Gold on CoinDCX: {COINDCX_URL}")
 

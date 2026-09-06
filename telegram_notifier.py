@@ -82,7 +82,7 @@ def send_startup_summary(current_price: float, resistances: list, supports: list
     msg = (
         "🚀 <b>LAPTOP STARTED -- GOLD EVENT FINDER ACTIVE</b>\n"
         "--------------------------------------------------\n"
-        f"🟡 <b>Current Spot Gold Price</b>: <code>${current_price:,.2f} USD</code>\n\n"
+        f"🟡 <b>Current CoinDCX XAUUSDT</b>: <code>${current_price:,.2f}</code>\n\n"
         "📈 <b>Immediate Resistances (Above)</b>:\n"
     )
 
@@ -154,7 +154,7 @@ def schedule_30min_post_event_update():
                     "🔄 <b>30-MINUTE POST-EVENT LEVEL UPDATE</b>\n"
                     "--------------------------------------------------\n"
                     "Fresh updated level labels after recent price action:\n\n"
-                    f"🟡 <b>Current Spot Gold Price</b>: <code>${current_price:,.2f} USD</code>\n\n"
+                    f"🟡 <b>Current CoinDCX XAUUSDT</b>: <code>${current_price:,.2f}</code>\n\n"
                     "📈 <b>Updated Resistances</b>:\n"
                 )
                 for idx, r in enumerate(resistances[:2], 1):

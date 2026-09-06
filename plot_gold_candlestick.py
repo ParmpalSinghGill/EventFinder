@@ -1,7 +1,7 @@
 """
 Generate 1-Month Daily Candlestick Chart for Spot Gold (XAU/USD)
 ===============================================================
-Matches TradingView Spot XAUUSD & CoinDCX PAXG/USDT.
+Matches CoinDCX gold futures B-XAU_USDT (XAUUSDT).
 """
 
 import os
@@ -48,7 +48,7 @@ def plot_candlestick():
     end_str = df_1mth.index[-1].strftime("%b %d, %Y")
     latest_close = df_1mth["Close"].iloc[-1]
     
-    title = f"Spot Gold (XAU/USD) 1-Month Daily Candlestick Chart ({start_str} – {end_str})\nMatches CoinDCX & TradingView Spot Rate | Latest Close: ${latest_close:,.2f} USD"
+    title = f"CoinDCX XAUUSDT 1-Month Daily Candlestick Chart ({start_str} – {end_str})\nPair: B-XAU_USDT | Latest Close: ${latest_close:,.2f}"
 
     os.makedirs(ARTIFACT_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(OUTPUT_PNG_LOCAL), exist_ok=True)

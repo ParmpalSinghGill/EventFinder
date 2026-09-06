@@ -403,7 +403,7 @@ HTML_TEMPLATE = """
     <!-- LIVE SPOT GOLD PANEL -->
     <div class="card">
         <div class="card-title">
-            <span>⚡ LIVE SPOT GOLD (XAU/USD) IMMEDIATE LEVELS</span>
+            <span>⚡ LIVE COINDCX XAUUSDT IMMEDIATE LEVELS</span>
             <div>
                 <a href="https://coindcx.com/futures/B-XAU_USDT" target="_blank" class="coindcx-btn">🚀 Trade on CoinDCX</a>
                 <button onclick="fetchGoldLive()" style="background: #243044; border: none; color: var(--text-color); padding: 7px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-left: 6px;">🔄 Refresh</button>
@@ -412,7 +412,7 @@ HTML_TEMPLATE = """
 
         <div class="price-hero">
             <div>
-                <span style="color: var(--text-muted); font-size: 13px; text-transform: uppercase; font-weight: 600;">Spot Gold Current Price</span>
+                <span style="color: var(--text-muted); font-size: 13px; text-transform: uppercase; font-weight: 600;">CoinDCX XAUUSDT Price</span>
                 <div class="price-big" id="spot_price_display">$0.00 USD</div>
             </div>
             <div style="text-align: right;">

@@ -52,8 +52,8 @@ def plot_daily_candlestick():
     latest_close = df_1mth["Close"].iloc[-1]
 
     title = (
-        f"Spot Gold (XAU/USD) 1-Month Daily Candlestick Chart ({start_str} – {end_str})\n"
-        f"Matches CoinDCX & TradingView Spot Rate | Latest Close: ${latest_close:,.2f} USD"
+        f"CoinDCX XAUUSDT 1-Month Daily Candlestick Chart ({start_str} – {end_str})\n"
+        f"Pair: B-XAU_USDT | Latest Close: ${latest_close:,.2f}"
     )
 
     mpf.plot(
@@ -114,8 +114,8 @@ def plot_intraday_1m_candlestick(tz_target="Asia/Kolkata"):
     latest_close = df["Close"].iloc[-1]
 
     title = (
-        f"Spot Gold (XAU/USD) Today's 1-Minute Intraday Candlestick Chart ({session_date})\n"
-        f"Timezone: {tz_label} | Session: {start_time} to {end_time} IST | Latest Price: ${latest_close:,.2f} USD"
+        f"CoinDCX XAUUSDT Today's 1-Minute Chart ({session_date})\n"
+        f"Timezone: {tz_label} | Session: {start_time} to {end_time} IST | Latest Price: ${latest_close:,.2f}"
     )
 
     mpf.plot(
