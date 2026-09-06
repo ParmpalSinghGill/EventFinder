@@ -148,16 +148,75 @@ def extract_title_candidates(text: str) -> List[str]:
     return candidates
 
 
+KNOWN_ALIASES: dict[str, str] = {
+    "tcs": "TCS",
+    "geshipping": "GESHIP",
+    "g eshipping": "GESHIP",
+    "sbi": "SBIN",
+    "statebankofindia": "SBIN",
+    "drreddyslabs": "DRREDDY",
+    "drreddylabs": "DRREDDY",
+    "drreddys": "DRREDDY",
+    "drreddy": "DRREDDY",
+    "nykaa": "NYKAA",
+    "hcltech": "HCLTECH",
+    "hcltechnologies": "HCLTECH",
+    "tatasteel": "TATASTEEL",
+    "tvsmotor": "TVSMOTOR",
+    "tvsmotors": "TVSMOTOR",
+    "icicibank": "ICICIBANK",
+    "hdfcbank": "HDFCBANK",
+    "lt": "LT",
+    "landt": "LT",
+    "larsentoubro": "LT",
+    "larsenandtoubro": "LT",
+    "ltfinance": "LTF",
+    "landtfinance": "LTF",
+    "lttechnology": "LTTS",
+    "landttechnology": "LTTS",
+    "ltm": "LTIM",
+    "ltimindtree": "LTIM",
+    "ideaforge": "IDEAFORGE",
+    "sterlitetech": "STLTECH",
+    "maruti": "MARUTI",
+    "marutisuzuki": "MARUTI",
+    "reliance": "RELIANCE",
+    "relianceindustries": "RELIANCE",
+    "titan": "TITAN",
+    "trent": "TRENT",
+    "ems": "EMS",
+}
+
+
 def match_company_to_symbol(candidate: str, catalog: List[dict]) -> str:
-    candidate_norm = normalize(candidate)
+    cand_clean = (candidate or "").strip()
+    candidate_norm = normalize(cand_clean)
     if not candidate_norm:
         return ""
 
+    # 1. Check known aliases (e.g. TCS -> TCS, GE Shipping -> GESHIP, SBI -> SBIN)
+    if candidate_norm in KNOWN_ALIASES:
+        return KNOWN_ALIASES[candidate_norm]
+
+    # 2. Direct exact match against symbol (e.g. TCS, EMS, RITES, INFY)
+    cand_upper = cand_clean.upper()
+    valid_symbols = {entry["symbol"] for entry in catalog}
+    if cand_upper in valid_symbols:
+        return cand_upper
+
+    # 3. Direct match against catalog company names
     for entry in catalog:
         name_norm = normalize(entry["name"])
-        if name_norm and (candidate_norm == name_norm or name_norm in candidate_norm or candidate_norm in name_norm):
+        if not name_norm:
+            continue
+        if candidate_norm == name_norm:
+            return entry["symbol"]
+        if len(name_norm) >= 5 and name_norm in candidate_norm:
+            return entry["symbol"]
+        if len(candidate_norm) >= 6 and candidate_norm in name_norm:
             return entry["symbol"]
 
+    # 4. Canonical token overlap matching
     candidate_tokens = set(_canonical_tokens(candidate))
     if not candidate_tokens:
         return ""

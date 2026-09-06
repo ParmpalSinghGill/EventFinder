@@ -13,7 +13,7 @@ event_finder:
   run_gold_event_finder: true
   run_stock_event_finder: true
   show_gold_events: true
-  show_stock_events: true
+  show_stock_events: false
 market:
   close: '15:30'
   open: 09:15

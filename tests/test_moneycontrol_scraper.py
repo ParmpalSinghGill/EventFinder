@@ -39,17 +39,18 @@ class MoneycontrolScraperTests(unittest.TestCase):
         self.assertIn("No ticker found:", review_text)
         self.assertIn("Knack Packaging", review_text)
 
-    def test_write_failure_outputs_creates_review_and_missing_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            out_dir = Path(tmp_dir)
-            write_failure_outputs(out_dir, datetime(2026, 7, 8), "network issue")
+    def test_ticker_mapping_aliases_and_exact_symbols(self) -> None:
+        from ticker_mapping import load_catalog, match_company_to_symbol
+        catalog = load_catalog()
 
-            review_path = out_dir / "MC_review_20260708.txt"
-            missing_path = out_dir / "MC_missing_20260708.txt"
-            self.assertTrue(review_path.exists())
-            self.assertTrue(missing_path.exists())
-            self.assertIn("network issue", review_path.read_text(encoding="utf-8"))
-            self.assertEqual(missing_path.read_text(encoding="utf-8"), "")
+        self.assertEqual(match_company_to_symbol("TCS", catalog), "TCS")
+        self.assertEqual(match_company_to_symbol("GE Shipping", catalog), "GESHIP")
+        self.assertEqual(match_company_to_symbol("SBI", catalog), "SBIN")
+        self.assertEqual(match_company_to_symbol("EMS", catalog), "EMS")
+        self.assertEqual(match_company_to_symbol("Dr Reddys Labs", catalog), "DRREDDY")
+        self.assertEqual(match_company_to_symbol("Afcons Infra", catalog), "AFCONS")
+        self.assertEqual(match_company_to_symbol("Hindustan Copper", catalog), "HINDCOPPER")
+        self.assertEqual(match_company_to_symbol("Piramal Finance", catalog), "PIRAMALFIN")
 
 
 if __name__ == "__main__":

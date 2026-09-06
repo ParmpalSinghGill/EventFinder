@@ -55,6 +55,8 @@ Thumbs.db
 
 # Project data and outputs
 data/
+Results/
+scratch/
 download_log.txt
 
 # Misc

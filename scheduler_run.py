@@ -62,10 +62,11 @@ def load_config(path="config.yml"):
             pass
 
     # Override notification setting based on show_stock_events
+    if "output" not in cfg or not isinstance(cfg["output"], dict):
+        cfg["output"] = {}
     if "event_finder" in cfg:
         show_stock = cfg["event_finder"].get("show_stock_events", True)
-        if "output" in cfg:
-            cfg["output"]["notify"] = bool(show_stock)
+        cfg["output"]["notify"] = bool(show_stock)
 
     return cfg
 
@@ -590,9 +591,10 @@ def main():
             uri = "eventfinder://runeod" if phase == "eod" else "eventfinder://run"
             what = ("full data update" if phase == "eod"
                     else "stock-list scan")
-            notify("EventFinder: on battery — run skipped",
-                   f"Plug in, or click Run now to do the {what}.",
-                   action=("Run now", uri))
+            if cfg["output"].get("notify", True):
+                notify("EventFinder: on battery — run skipped",
+                       f"Plug in, or click Run now to do the {what}.",
+                       action=("Run now", uri))
             print(f"EventFinder @ {now.strftime('%Y-%m-%d %H:%M')} IST: on battery "
                   f"-- deferred ({phase}); sent 'Run now' prompt.")
             inject_battery_banner(cfg, uri)
