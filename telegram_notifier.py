@@ -77,6 +77,19 @@ def send_telegram_message(message_text: str) -> bool:
         return False
 
 
+def _broadcast(html_text: str,
+               discord_title: str = "EventFinder Gold Alert",
+               discord_color: int = 0xF39C12) -> bool:
+    """Send to Telegram (if enabled) and Discord (if enabled)."""
+    tg_ok = send_telegram_message(html_text)
+    try:
+        from discord_notifier import send_discord_html
+        send_discord_html(html_text, title=discord_title, color=discord_color)
+    except Exception as e:
+        print(f"[Discord Broadcast Warning]: {e}")
+    return tg_ok
+
+
 def send_startup_summary(current_price: float, resistances: list, supports: list):
     """Message Type 1: Sent when laptop boots up and background service starts."""
     msg = (
@@ -99,29 +112,51 @@ def send_startup_summary(current_price: float, resistances: list, supports: list
     else:
         msg += "  • None\n"
 
-    return send_telegram_message(msg)
+    return _broadcast(msg)
 
 
 def send_event_trigger_alert(event_dict: dict):
-    """Message Type 2: Sent immediately when price comes within N% threshold of a level."""
+    """NEAR: price entered the 0.20% band. TOUCH: price actually hit the label."""
     lname = event_dict.get("level_name", "Key Level")
     ltf = event_dict.get("timeframe", "Daily")
     lprice = event_dict.get("level_price", 0.0)
     sprice = event_dict.get("spot_price", 0.0)
     gap_pct = event_dict.get("dist_pct", 0.0)
+    status = str(event_dict.get("status") or "NEAR").upper()
+
+    if status == "TOUCH":
+        msg = (
+            f"✋ <b>PRICE TOUCHED THE LABEL {lname}</b>\n"
+            "--------------------------------------------------\n"
+            f"📍 <b>Level</b>: <b>{lname}</b> ({ltf})\n"
+            f"🎯 <b>Level Price</b>: <code>${lprice:,.2f}</code>\n"
+            f"🟡 <b>Spot Price</b>: <code>${sprice:,.2f}</code>\n"
+            f"📏 <b>Gap</b>: <code>{gap_pct:.2f}%</code>\n"
+            "⏱ Back to <b>5-minute</b> checks."
+        )
+        sent = _broadcast(
+            msg,
+            discord_title=f"PRICE TOUCHED THE LABEL {lname}",
+            discord_color=0xE74C3C
+        )
+        schedule_30min_post_event_update()
+        return sent
 
     msg = (
-        "🎯 <b>GOLD LEVEL EVENT TRIGGERED!</b>\n"
+        "🎯 <b>GOLD NEAR LEVEL</b>\n"
         "--------------------------------------------------\n"
         f"📍 <b>Level</b>: <b>{lname}</b> ({ltf})\n"
         f"🎯 <b>Level Price</b>: <code>${lprice:,.2f}</code>\n"
         f"🟡 <b>Spot Price</b>: <code>${sprice:,.2f}</code>\n"
-        f"📏 <b>Proximity Gap</b>: <code>{gap_pct:.2f}%</code> (Under threshold!)"
+        f"📏 <b>Proximity Gap</b>: <code>{gap_pct:.2f}%</code> (Under 0.20%)\n"
+        "⏱ Watching every <b>30 seconds</b> until price touches this label "
+        "or moves more than <b>0.30%</b> away."
     )
-
-    sent = send_telegram_message(msg)
-    schedule_30min_post_event_update()
-    return sent
+    return _broadcast(
+        msg,
+        discord_title=f"GOLD NEAR LEVEL: {lname}",
+        discord_color=0xF39C12
+    )
 
 
 def schedule_30min_post_event_update():
@@ -164,7 +199,7 @@ def schedule_30min_post_event_update():
                 for idx, s in enumerate(supports[:2], 1):
                     msg += f"  • <b>S{idx}</b>: {s['name']} ({s['timeframe']}) @ <code>${s['price']:,.2f}</code> (-{s['gap_pct']:.2f}%)\n"
 
-                send_telegram_message(msg)
+                _broadcast(msg)
         except Exception as e:
             print(f"[Telegram Post-Event Error]: {e}")
 

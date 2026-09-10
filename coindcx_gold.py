@@ -27,6 +27,10 @@ DATA_DIR = os.path.join("data", "gold_xauusd")
 DAILY_CSV = os.path.join(DATA_DIR, "gold_spot_xauusd_1d.csv")
 MINUTE_CSV = os.path.join(DATA_DIR, "gold_spot_xauusd_1m_today.csv")
 
+# Spot/COMEX gold is closed Saturday-Sunday. CoinDCX still prints weekend
+# candles; those are dropped for events and for liquidity/label construction.
+GOLD_TZ = "Asia/Kolkata"
+
 
 class CoinDCXError(RuntimeError):
     pass
@@ -52,6 +56,45 @@ def fetch_candles(resolution: str, from_epoch: int, to_epoch: int) -> list:
     if payload.get("s") not in (None, "ok"):
         raise CoinDCXError(f"CoinDCX candles status={payload.get('s')!r}")
     return payload.get("data") or []
+
+
+def is_gold_weekend(ts=None) -> bool:
+    """True if `ts` (default: now) is Saturday or Sunday in IST."""
+    if ts is None:
+        ts = datetime.now()
+    stamp = pd.Timestamp(ts)
+    if stamp.tzinfo is None:
+        stamp = stamp.tz_localize(GOLD_TZ)
+    else:
+        stamp = stamp.tz_convert(GOLD_TZ)
+    return int(stamp.dayofweek) >= 5
+
+
+def drop_weekend_bars(df: pd.DataFrame, time_col: str | None = None) -> pd.DataFrame:
+    """Remove Saturday/Sunday candles so labels use weekday liquidity only."""
+    if df is None or df.empty:
+        return df
+    work = df.copy()
+    if time_col is None:
+        if "Datetime" in work.columns:
+            time_col = "Datetime"
+        elif "Date" in work.columns:
+            time_col = "Date"
+
+    if time_col and time_col in work.columns:
+        ts = pd.to_datetime(work[time_col], utc=(time_col == "Datetime"), errors="coerce")
+        if getattr(ts.dt, "tz", None) is not None:
+            weekday = ts.dt.tz_convert(GOLD_TZ).dt.dayofweek
+        else:
+            weekday = ts.dt.dayofweek
+        return work.loc[weekday < 5].copy()
+
+    idx = pd.to_datetime(work.index)
+    if getattr(idx, "tz", None) is not None:
+        weekday = idx.tz_convert(GOLD_TZ).dayofweek
+    else:
+        weekday = idx.dayofweek
+    return work.loc[weekday < 5].copy()
 
 
 def _rows_to_frame(rows: list, time_col: str) -> pd.DataFrame:
@@ -125,20 +168,28 @@ def _load_csv(path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def fetch_latest_data(save: bool = True):
-    """Daily history + last 24h of 1-minute bars. Falls back to cached CSVs on error."""
+def fetch_latest_data(save: bool = True, refresh_daily: bool = True):
+    """Daily history + last 24h of 1-minute bars. Falls back to cached CSVs on error.
+
+    During 30-second watch mode, pass refresh_daily=False to reuse the daily CSV
+    so CoinDCX is not hit for the full daily history every tick.
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
     errors = []
 
-    try:
-        df_daily = fetch_daily()
-        if df_daily.empty:
-            raise CoinDCXError("no daily candles")
-        if save:
-            df_daily.to_csv(DAILY_CSV, index=False)
-    except Exception as exc:
-        errors.append(f"daily: {exc}")
+    df_daily = pd.DataFrame()
+    if not refresh_daily:
         df_daily = _load_csv(DAILY_CSV)
+    if df_daily.empty:
+        try:
+            df_daily = fetch_daily()
+            if df_daily.empty:
+                raise CoinDCXError("no daily candles")
+            if save:
+                df_daily.to_csv(DAILY_CSV, index=False)
+        except Exception as exc:
+            errors.append(f"daily: {exc}")
+            df_daily = _load_csv(DAILY_CSV)
 
     try:
         df_1m = fetch_minutes(hours=24.0)
@@ -155,4 +206,7 @@ def fetch_latest_data(save: bool = True):
         if df_daily.empty or df_1m.empty:
             print("[CoinDCX] using cached CSV where available")
 
+    # Keep weekend prints on disk, but never use them for levels/events.
+    df_daily = drop_weekend_bars(df_daily, "Date")
+    df_1m = drop_weekend_bars(df_1m, "Datetime")
     return df_daily, df_1m

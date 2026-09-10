@@ -29,10 +29,13 @@ import yaml
 sys.path.append(os.getcwd())
 try:
     from telegram_notifier import send_startup_summary
-    from xauusd_event_finder import (compute_stock_screener_levels,
-                                     fetch_latest_data)
+    from xauusd_event_finder import (MONITOR_SLOW_SEC, compute_stock_screener_levels,
+                                     fetch_latest_data, read_monitor_interval)
+    from coindcx_gold import is_gold_weekend
 except ImportError:
-    pass
+    is_gold_weekend = lambda *_args, **_kw: False
+    MONITOR_SLOW_SEC = 300
+    read_monitor_interval = lambda: 300
 
 CONFIG_YML = "config.yml"
 CONFIG_JSON = os.path.join("data", "gold_xauusd", "event_config.json")
@@ -101,7 +104,7 @@ def send_laptop_startup_telegram():
 def main_loop():
     print("=" * 75)
     print(" BACKGROUND EVENT FINDER DAEMON STARTED")
-    print(" Runs continuously every 5 minutes in background")
+    print(" Runs 5-minute gold checks, or 30-second checks while price is near a label")
     print("=" * 75)
 
     # Send startup message when laptop turns on / daemon starts
@@ -110,6 +113,7 @@ def main_loop():
     last_executed_stock_slot = None
 
     while True:
+        sleep_sec = MONITOR_SLOW_SEC
         try:
             now = datetime.now()
             now_str = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -124,9 +128,16 @@ def main_loop():
             print(f"  * Gold Event Finder: {'ENABLED' if run_gold else 'DISABLED'} (Alerts: {'ON' if show_gold else 'SILENT'}, Tol: {tol_pct:.2f}%)")
             print(f"  * Stock Event Finder: {'ENABLED' if run_stock else 'DISABLED'}")
 
-            # 1. Run Gold Event Finder if enabled (runs on every 5-min loop)
+            # 1. Run Gold Event Finder if enabled (weekdays only; gold is off Sat/Sun)
             if run_gold:
-                subprocess.run([sys.executable, "xauusd_event_finder.py"], check=False)
+                if is_gold_weekend(now):
+                    print("  -> Gold Event Finder skipped (Saturday/Sunday).")
+                else:
+                    subprocess.run([sys.executable, "xauusd_event_finder.py"], check=False)
+                    try:
+                        sleep_sec = int(read_monitor_interval())
+                    except Exception:
+                        sleep_sec = MONITOR_SLOW_SEC
             else:
                 print("  -> Gold Event Finder is turned OFF in config. Skipping.")
 
@@ -160,9 +171,10 @@ def main_loop():
 
         except Exception as e:
             print(f"  [Loop Error]: {e}")
+            sleep_sec = MONITOR_SLOW_SEC
 
-        # Sleep for 5 minutes (300 seconds)
-        time.sleep(300)
+        print(f"  -> Next loop in {sleep_sec} seconds")
+        time.sleep(max(5, int(sleep_sec)))
 
 
 if __name__ == "__main__":

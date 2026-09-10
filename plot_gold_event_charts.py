@@ -15,7 +15,7 @@ import mplfinance as mpf
 import pandas as pd
 from matplotlib.patches import Rectangle
 
-from coindcx_gold import DAILY_CSV, fetch_daily, fetch_minutes
+from coindcx_gold import DAILY_CSV, drop_weekend_bars, fetch_daily, fetch_minutes
 from find_labels import find_labels, nearest_levels
 from xauusd_event_finder import PREV_DAY_HIERARCHY_TOL, RETRIGGER_DIST, TIMEFRAMES
 
@@ -50,6 +50,7 @@ def load_daily() -> pd.DataFrame:
     if df["Date"].dt.tz is not None:
         df["Date"] = df["Date"].dt.tz_convert("UTC").dt.tz_localize(None)
     df = df.sort_values("Date").set_index("Date")
+    df = drop_weekend_bars(df)
     return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
 
 
@@ -60,9 +61,10 @@ def load_minutes() -> pd.DataFrame:
         return raw
     raw = raw.copy()
     raw["Datetime"] = pd.to_datetime(raw["Datetime"], utc=True)
-    return raw.sort_values("Datetime").set_index("Datetime")[
+    raw = raw.sort_values("Datetime").set_index("Datetime")[
         ["Open", "High", "Low", "Close", "Volume"]
     ].dropna(subset=["Close"])
+    return drop_weekend_bars(raw)
 
 
 def prepare_day_pivots(df_hist: pd.DataFrame) -> dict:
@@ -85,7 +87,25 @@ def prepare_day_pivots(df_hist: pd.DataFrame) -> dict:
     prev_day = work.iloc[-1]
     frames["_pdh"] = float(prev_day["High"])
     frames["_pdl"] = float(prev_day["Low"])
+    frames["_prev_date"] = work.index[-1]
     return frames
+
+
+def _source_meta(date, field: str, tf_name: str) -> dict:
+    if date is None or (isinstance(date, float) and pd.isna(date)):
+        return {
+            "source_date": "",
+            "source_field": field,
+            "source_tf": tf_name,
+            "source": f"CoinDCX {tf_name} {field}",
+        }
+    d = pd.Timestamp(date)
+    return {
+        "source_date": d.strftime("%Y-%m-%d"),
+        "source_field": field,
+        "source_tf": tf_name,
+        "source": f"CoinDCX {tf_name} {field} {d.strftime('%a %d %b %Y')}",
+    }
 
 
 def compute_levels_from_pivots(frames: dict, current_price: float, today_high: float, today_low: float) -> list:
@@ -101,26 +121,33 @@ def compute_levels_from_pivots(frames: dict, current_price: float, today_high: f
             if today_high < price:
                 lvl = {"id": f"{tf_key}_R_{price:.2f}", "timeframe": packed["label"],
                        "name": f"{packed['label']} Resistance", "type": "resistance", "price": price}
+                lvl.update(_source_meta(res_lvl.get("formed_date"), "High", packed["label"]))
                 (higher_tf_levels if tf_key in ["2Y", "1Y", "M", "W"] else daily_levels).append(lvl)
         if sup_lvl is not None:
             price = float(sup_lvl["price"])
             if today_low > price:
                 lvl = {"id": f"{tf_key}_S_{price:.2f}", "timeframe": packed["label"],
                        "name": f"{packed['label']} Support", "type": "support", "price": price}
+                lvl.update(_source_meta(sup_lvl.get("formed_date"), "Low", packed["label"]))
                 (higher_tf_levels if tf_key in ["2Y", "1Y", "M", "W"] else daily_levels).append(lvl)
 
     pdh, pdl = frames["_pdh"], frames["_pdl"]
+    prev_date = frames["_prev_date"]
     candidate_prev_day = []
     if today_high < pdh:
-        candidate_prev_day.append({
+        lvl = {
             "id": f"PDH_{pdh:.2f}", "timeframe": "PrevDay",
             "name": "Prev Day High (PDH)", "type": "resistance", "price": pdh,
-        })
+        }
+        lvl.update(_source_meta(prev_date, "High", "PrevDay"))
+        candidate_prev_day.append(lvl)
     if today_low > pdl:
-        candidate_prev_day.append({
+        lvl = {
             "id": f"PDL_{pdl:.2f}", "timeframe": "PrevDay",
             "name": "Prev Day Low (PDL)", "type": "support", "price": pdl,
-        })
+        }
+        lvl.update(_source_meta(prev_date, "Low", "PrevDay"))
+        candidate_prev_day.append(lvl)
     valid_prev_day = []
     for pd_lvl in candidate_prev_day:
         pd_price = pd_lvl["price"]
@@ -144,8 +171,13 @@ def replay_last_7_days(daily: pd.DataFrame, minutes_utc: pd.DataFrame) -> list:
     today_high = today_low = None
 
     for i, (ts, row) in enumerate(bars.iterrows()):
+        ts_ist = ts.tz_convert(IST)
+        if int(ts_ist.dayofweek) >= 5:
+            continue
         px = float(row["Close"])
         day = pd.Timestamp(ts.tz_convert("UTC").date())
+        if int(day.dayofweek) >= 5:
+            continue
 
         if last_day != day:
             hist = daily.loc[daily.index < day]
@@ -181,6 +213,10 @@ def replay_last_7_days(daily: pd.DataFrame, minutes_utc: pd.DataFrame) -> list:
                         "spot": round(px, 2),
                         "dist_pct": round(dist * 100, 3),
                         "level_id": lid,
+                        "source": lvl.get("source", "CoinDCX B-XAU_USDT"),
+                        "source_date": lvl.get("source_date", ""),
+                        "source_field": lvl.get("source_field", ""),
+                        "source_tf": lvl.get("source_tf", lvl["timeframe"]),
                     })
                     st["triggered"] = True
             elif was and dist > RETRIGGER_DIST:
@@ -195,6 +231,14 @@ def replay_last_7_days(daily: pd.DataFrame, minutes_utc: pd.DataFrame) -> list:
 
 def find_source_candle(daily: pd.DataFrame, event: dict) -> pd.Timestamp | None:
     """Daily bar that created this liquidity (PDH/PDL previous day, else matching High/Low)."""
+    if event.get("source_date"):
+        src = pd.Timestamp(event["source_date"])
+        if src in daily.index:
+            return src
+        loc = daily.index.get_indexer([src], method="nearest")
+        if loc.size and loc[0] >= 0:
+            return daily.index[loc[0]]
+
     ts = pd.Timestamp(event["ts"])
     event_day = ts.normalize()
     price = float(event["price"])
@@ -253,6 +297,10 @@ def plot_event(daily: pd.DataFrame, minutes: pd.DataFrame, event: dict, idx: int
 
     daily_end = event_day + timedelta(days=2)
     daily_start = event_day - timedelta(days=45)
+    if event.get("source_date"):
+        src = pd.Timestamp(event["source_date"])
+        if src < daily_start:
+            daily_start = src - timedelta(days=5)
     dview = daily.loc[(daily.index >= daily_start) & (daily.index <= daily_end)].copy()
     if dview.empty:
         dview = daily.iloc[-45:]
@@ -265,6 +313,11 @@ def plot_event(daily: pd.DataFrame, minutes: pd.DataFrame, event: dict, idx: int
         mview = minutes.loc[(minutes.index >= day0) & (minutes.index < day0 + pd.Timedelta(days=1))].copy()
 
     source_ts = find_source_candle(daily, event)
+    source_txt = event.get("source") or "CoinDCX B-XAU_USDT"
+    source_box = "LIQUIDITY"
+    if event.get("source_date") and event.get("source_field"):
+        src_d = pd.Timestamp(event["source_date"])
+        source_box = f"LIQUIDITY  {src_d.strftime('%d %b')} {event['source_field']}"
     level_ls = "--" if event["typ"] == "support" else "-"
     band_lo, band_hi = price * (1 - TRIGGER_TOL), price * (1 + TRIGGER_TOL)
 
@@ -288,14 +341,17 @@ def plot_event(daily: pd.DataFrame, minutes: pd.DataFrame, event: dict, idx: int
     ax_d.set_ylabel("Gold price (USD)", color="#cccccc")
     ax_dv.set_ylabel("Volume", color="#cccccc")
     ax_d.set_title(
-        f"Daily candles — liquidity {event['name']} ({event['tf']}) @ ${price:,.2f}\n"
-        f"Blue box = candle that formed the level   |   Orange box = event day   |   "
-        f"Yellow line = level   |   dotted = 0.20% trigger band",
+        f"Daily candles — {event['name']} @ ${price:,.2f}   |   feed: CoinDCX B-XAU_USDT\n"
+        f"Liquidity source: {source_txt}   |   Blue box = source candle   |   "
+        f"Orange box = event day   |   Yellow = level   |   dotted = 0.20% band",
         color="#f1c40f", fontsize=11, pad=10, loc="left",
     )
 
     if source_ts is not None and source_ts in dview.index:
-        _box_candle(ax_d, dview, source_ts, SOURCE_COLOR, "LIQUIDITY CANDLE")
+        _box_candle(ax_d, dview, source_ts, SOURCE_COLOR, source_box)
+    elif source_ts is not None:
+        nearest = dview.index[dview.index.get_indexer([source_ts], method="nearest")[0]]
+        _box_candle(ax_d, dview, nearest, SOURCE_COLOR, source_box)
     event_daily_ts = dview.index[dview.index.get_indexer([event_day], method="nearest")[0]]
     _box_candle(ax_d, dview, event_daily_ts, TRIGGER_COLOR, "EVENT DAY")
 
@@ -321,7 +377,8 @@ def plot_event(daily: pd.DataFrame, minutes: pd.DataFrame, event: dict, idx: int
     ax_m.set_title(
         f"1-minute candles — trigger {ts_ist.strftime('%d %b %Y %H:%M')} IST "
         f"({ts_utc.strftime('%H:%M')} UTC)  |  spot ${event['spot']:,.2f}  vs  level ${price:,.2f}\n"
-        f"Orange box = the 1-minute candle that fired the event",
+        f"Orange box = the 1-minute candle that fired the event   |   "
+        f"level from {source_txt}",
         color="#e67e22", fontsize=11, pad=10, loc="left",
     )
     _box_candle(ax_m, mview, ts_ist, TRIGGER_COLOR, "TRIGGER CANDLE", lw=2.4)
@@ -342,8 +399,8 @@ def plot_event(daily: pd.DataFrame, minutes: pd.DataFrame, event: dict, idx: int
         color="#ecf0f1", fontsize=14, fontweight="bold", y=0.995,
     )
     caption = (
-        "Source: CoinDCX B-XAU_USDT · last 7 days · times in IST · "
-        "Event = 1-minute close within 0.20% of an uncrossed label"
+        f"Feed: CoinDCX B-XAU_USDT  |  Liquidity source: {source_txt}  |  "
+        "weekdays only  |  Event = 1-minute close within 0.20% of an uncrossed label"
     )
     fig.text(0.01, 0.006, caption, color="#7f8c8d", fontsize=8)
 
@@ -378,7 +435,7 @@ def write_index(paths: list[str]):
 </style></head>
 <body>
 <h1>CoinDCX XAUUSDT Event Finder — last 7 days</h1>
-<p>Each figure is two graphs: daily candles (liquidity level + source candle) and 1-minute candles (trigger candle boxed). Times are IST.</p>
+<p>Each figure is two graphs: daily candles with the liquidity source candle boxed, and 1-minute candles with the trigger boxed. Feed: CoinDCX B-XAU_USDT. Times are IST. Weekends excluded.</p>
 {''.join(cards)}
 </body></html>"""
     with open(os.path.join(OUT_DIR, "index.html"), "w", encoding="utf-8") as f:
@@ -396,21 +453,44 @@ def main():
     print(f"Minute {minutes_utc.index.min()} -> {minutes_utc.index.max()}  ({len(minutes_utc)} bars) UTC")
 
     events = replay_last_7_days(daily, minutes_utc)
-    print("\n" + "=" * 96)
-    print(" COINDCX XAUUSDT  —  labels that should have fired in the last 7 days  (times IST)")
-    print("=" * 96)
+
+    print("\n" + "=" * 108)
+    print(" WEEKDAY LEVELS (CoinDCX B-XAU_USDT, weekends excluded)  |  liquidity source = candle that formed the level")
+    print("=" * 108)
+    if not minutes_utc.empty:
+        start = minutes_utc.index.min().tz_convert("UTC").normalize().tz_localize(None)
+        end = minutes_utc.index.max().tz_convert("UTC").normalize().tz_localize(None)
+        for day in pd.date_range(start, end, freq="D"):
+            if int(day.dayofweek) >= 5:
+                continue
+            hist = daily.loc[daily.index < day]
+            if hist.empty:
+                continue
+            pivots = prepare_day_pivots(hist)
+            px = float(hist.iloc[-1]["Close"])
+            levels = compute_levels_from_pivots(pivots, px, today_high=px, today_low=px)
+            print(f"\n  {day.strftime('%a %d %b %Y')}  prev close ${px:,.2f}")
+            for lvl in sorted(levels, key=lambda x: -x["price"]):
+                gap = (lvl["price"] - px) / px * 100
+                src = lvl.get("source", "")
+                print(f"    {lvl['timeframe']:8} {lvl['name']:24} ${lvl['price']:10,.2f}  "
+                      f"gap={gap:+6.2f}%  |  {src}")
+
+    print("\n" + "=" * 108)
+    print(" EVENTS that should have fired  (times IST)")
+    print("=" * 108)
     if not events:
         print("No labels within 0.20% of an uncrossed level.")
         return
 
-    print(f"{'#':>3}  {'Trigger (IST)':<22}  {'Label':<28}  {'TF':<8}  {'Level':>10}  {'Trigger px':>11}  {'Gap':>7}")
-    print("-" * 96)
+    print(f"{'#':>3}  {'Trigger (IST)':<22}  {'Label':<24}  {'Level':>10}  {'Trig px':>10}  {'Gap':>7}  Liquidity source")
+    print("-" * 108)
     for i, ev in enumerate(events, 1):
         print(
-            f"{i:3d}  {ev['ist']:<22}  {ev['name']:<28}  {ev['tf']:<8}  "
-            f"${ev['price']:9,.2f}  ${ev['spot']:10,.2f}  {ev['dist_pct']:6.3f}%"
+            f"{i:3d}  {ev['ist']:<22}  {ev['name']:<24}  "
+            f"${ev['price']:9,.2f}  ${ev['spot']:9,.2f}  {ev['dist_pct']:6.3f}%  {ev.get('source', '')}"
         )
-    print("=" * 96)
+    print("=" * 108)
     print(f"TOTAL EVENTS: {len(events)}")
 
     csv_path = os.path.join(OUT_DIR, "last_7_days_events_ist.csv")
