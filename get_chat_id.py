@@ -12,22 +12,22 @@ import urllib.parse
 import urllib.request
 import yaml
 
-BOT_TOKEN = "8952946545:AAFLYnADSfcF7PEwkpLPh-0oOj4Md1bIExE"
+from env_settings import TELEGRAM_BOT_TOKEN, env_get, save_notification_secrets
+
 CONFIG_YML = "config.yml"
 CONFIG_JSON = os.path.join("data", "gold_xauusd", "event_config.json")
-ENV_FILE = ".env"
+
+
+def _bot_token() -> str:
+    return env_get(TELEGRAM_BOT_TOKEN)
 
 
 def save_detected_chat_id(chat_id_str: str):
     print(f"\n[SUCCESS] Detected Telegram Chat ID: {chat_id_str}")
+    token = _bot_token()
+    save_notification_secrets(telegram={"bot_token": token, "chat_id": chat_id_str})
+    print("  [Saved] -> .env")
 
-    # 1. Save in .env
-    with open(ENV_FILE, "w", encoding="utf-8") as f:
-        f.write(f"TELEGRAM_BOT_TOKEN={BOT_TOKEN}\n")
-        f.write(f"TELEGRAM_CHAT_ID={chat_id_str}\n")
-    print(f"  [Saved] -> {ENV_FILE}")
-
-    # 2. Save in event_config.json
     try:
         conf = {}
         if os.path.exists(CONFIG_JSON):
@@ -36,15 +36,15 @@ def save_detected_chat_id(chat_id_str: str):
         if "telegram" not in conf:
             conf["telegram"] = {}
         conf["telegram"]["enable_telegram"] = True
-        conf["telegram"]["bot_token"] = BOT_TOKEN
-        conf["telegram"]["chat_id"] = chat_id_str
+        conf["telegram"].pop("bot_token", None)
+        conf["telegram"].pop("chat_id", None)
+        os.makedirs(os.path.dirname(CONFIG_JSON), exist_ok=True)
         with open(CONFIG_JSON, "w", encoding="utf-8") as f:
             json.dump(conf, f, indent=2)
         print(f"  [Saved] -> {CONFIG_JSON}")
     except Exception as e:
         print(f"Error saving JSON: {e}")
 
-    # 3. Save in config.yml
     try:
         raw_yml = {}
         if os.path.exists(CONFIG_YML):
@@ -53,15 +53,14 @@ def save_detected_chat_id(chat_id_str: str):
         if "telegram" not in raw_yml:
             raw_yml["telegram"] = {}
         raw_yml["telegram"]["enable_telegram"] = True
-        raw_yml["telegram"]["bot_token"] = BOT_TOKEN
-        raw_yml["telegram"]["chat_id"] = chat_id_str
+        raw_yml["telegram"].pop("bot_token", None)
+        raw_yml["telegram"].pop("chat_id", None)
         with open(CONFIG_YML, "w", encoding="utf-8") as f:
             yaml.dump(raw_yml, f, default_flow_style=False)
         print(f"  [Saved] -> {CONFIG_YML}")
     except Exception as e:
         print(f"Error saving YAML: {e}")
 
-    # 4. Send Confirmation Test Telegram Message
     try:
         from telegram_notifier import send_telegram_message
         send_telegram_message("🎉 *TELEGRAM CONNECTED SUCCESSFULLY!*\nYour Chat ID has been saved.")
@@ -71,10 +70,14 @@ def save_detected_chat_id(chat_id_str: str):
 
 
 def listen_for_chat_id():
+    token = _bot_token()
     print("=" * 70)
     print(" TELEGRAM CHAT ID AUTO-DETECTOR")
     print("=" * 70)
-    print(f" Bot Token: {BOT_TOKEN}")
+    if not token:
+        print(" Missing TELEGRAM_BOT_TOKEN in .env")
+        return None
+    print(f" Bot Token: {token[:8]}...")
     print("\nINSTRUCTIONS:")
     print(" 1. Open Telegram on your Phone or Computer.")
     print(" 2. Open your Bot chat and press 'START' or send ANY message (e.g. 'hi').")
@@ -85,7 +88,7 @@ def listen_for_chat_id():
 
     while time.time() - start_time < 300:
         try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=5"
+            url = f"https://api.telegram.org/bot{token}/getUpdates?offset={last_update_id + 1}&timeout=5"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))

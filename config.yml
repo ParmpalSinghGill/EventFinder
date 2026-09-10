@@ -8,6 +8,8 @@ data:
   update_hourly_eod: false
   update_hourly_intraday: false
   workers: 8
+discord:
+  enable_discord: true
 event_finder:
   gold_trigger_tol: 0.002
   run_gold_event_finder: true
@@ -44,6 +46,4 @@ screener:
   target: 20
   tol: 0.005
 telegram:
-  bot_token: 8952946545:AAFLYnADSfcF7PEwkpLPh-0oOj4Md1bIExE
-  chat_id: '406879558'
   enable_telegram: true

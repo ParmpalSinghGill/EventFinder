@@ -26,6 +26,8 @@ import yaml
 
 sys.path.append(os.getcwd())
 try:
+    from env_settings import (apply_discord_secrets, apply_telegram_secrets,
+                              save_notification_secrets)
     from telegram_notifier import (load_telegram_config,
                                    send_telegram_message)
     from xauusd_event_finder import (COINDCX_URL, EVENTS_CSV,
@@ -37,6 +39,9 @@ try:
                                      session_high_low)
 except ImportError:
     COINDCX_URL = "https://coindcx.com/futures/B-XAU_USDT"
+    apply_discord_secrets = lambda c: c
+    apply_telegram_secrets = lambda c: c
+    save_notification_secrets = lambda **_kw: None
 
 app = Flask(__name__)
 
@@ -63,6 +68,8 @@ DEFAULT_CONFIG = {
 
 def load_config() -> dict:
     conf = DEFAULT_CONFIG.copy()
+    conf["telegram"] = dict(DEFAULT_CONFIG["telegram"])
+    conf["discord"] = dict(DEFAULT_CONFIG["discord"])
     if os.path.exists(CONFIG_YML):
         try:
             with open(CONFIG_YML, "r", encoding="utf-8") as f:
@@ -90,13 +97,36 @@ def load_config() -> dict:
         except Exception:
             pass
 
+    if "telegram" not in conf or not isinstance(conf.get("telegram"), dict):
+        conf["telegram"] = dict(DEFAULT_CONFIG["telegram"])
+    if "discord" not in conf or not isinstance(conf.get("discord"), dict):
+        conf["discord"] = dict(DEFAULT_CONFIG["discord"])
+    apply_telegram_secrets(conf["telegram"])
+    apply_discord_secrets(conf["discord"])
     return conf
 
 
+def _public_json_config(conf: dict) -> dict:
+    """Persist toggles only — tokens and webhook URL live in .env."""
+    out = dict(conf)
+    tg = dict(out.get("telegram") or {})
+    tg.pop("bot_token", None)
+    tg.pop("chat_id", None)
+    out["telegram"] = tg
+    disc = dict(out.get("discord") or {})
+    disc.pop("webhook_url", None)
+    out["discord"] = disc
+    return out
+
+
 def save_config(conf: dict):
+    save_notification_secrets(
+        telegram=conf.get("telegram") or {},
+        discord=conf.get("discord") or {}
+    )
     os.makedirs(os.path.dirname(CONFIG_JSON), exist_ok=True)
     with open(CONFIG_JSON, "w", encoding="utf-8") as f:
-        json.dump(conf, f, indent=2)
+        json.dump(_public_json_config(conf), f, indent=2)
 
     try:
         raw_yml = {}
@@ -111,8 +141,12 @@ def save_config(conf: dict):
             "run_stock_event_finder": conf.get("run_stock_event_finder", True),
             "show_stock_events": conf.get("show_stock_events", True)
         }
-        raw_yml["telegram"] = conf.get("telegram", {})
-        raw_yml["discord"] = conf.get("discord", {})
+        raw_yml["telegram"] = {
+            "enable_telegram": (conf.get("telegram") or {}).get("enable_telegram", True)
+        }
+        raw_yml["discord"] = {
+            "enable_discord": (conf.get("discord") or {}).get("enable_discord", True)
+        }
 
         with open(CONFIG_YML, "w", encoding="utf-8") as f:
             yaml.dump(raw_yml, f, default_flow_style=False)
@@ -530,7 +564,7 @@ HTML_TEMPLATE = """
         <div class="control-row">
             <div class="control-info">
                 <h4>Telegram Bot Token</h4>
-                <p>Bot token from @BotFather (e.g. 123456789:ABCdefGHI...)</p>
+                <p>Bot token from @BotFather. Stored in local <code>.env</code>, not in git.</p>
             </div>
             <div>
                 <input type="text" id="tg_bot_token" class="text-input" placeholder="Paste Bot Token here">
@@ -540,7 +574,7 @@ HTML_TEMPLATE = """
         <div class="control-row">
             <div class="control-info">
                 <h4>Telegram Chat ID</h4>
-                <p>Your Telegram User or Channel Chat ID (e.g. 987654321)</p>
+                <p>Your Telegram User or Channel Chat ID. Stored in local <code>.env</code>.</p>
             </div>
             <div>
                 <input type="text" id="tg_chat_id" class="text-input" placeholder="Paste Chat ID here">
@@ -569,7 +603,7 @@ HTML_TEMPLATE = """
         <div class="control-row" style="flex-direction: column; align-items: stretch; gap: 8px;">
             <div class="control-info">
                 <h4>Discord Webhook URL</h4>
-                <p>From channel settings → Integrations → Webhooks. Starts with https://discord.com/api/webhooks/</p>
+                <p>From channel settings → Integrations → Webhooks. Saved in local <code>.env</code> as DISCORD_WEBHOOK_URL (not committed).</p>
             </div>
             <input type="text" id="discord_webhook" class="text-input text-input-wide" placeholder="Paste Discord webhook URL here">
         </div>

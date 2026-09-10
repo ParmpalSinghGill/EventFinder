@@ -44,6 +44,7 @@ htmlcov/
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Logs and databases
 *.log

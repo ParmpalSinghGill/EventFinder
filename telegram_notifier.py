@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 import yaml
 
+from env_settings import apply_telegram_secrets
+
 CONFIG_YML = "config.yml"
 CONFIG_JSON = os.path.join("data", "gold_xauusd", "event_config.json")
 
@@ -42,7 +44,7 @@ def load_telegram_config() -> dict:
         except Exception:
             pass
 
-    return conf
+    return apply_telegram_secrets(conf)
 
 
 def send_telegram_message(message_text: str) -> bool:

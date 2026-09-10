@@ -9,6 +9,8 @@ import urllib.error
 import urllib.request
 import yaml
 
+from env_settings import apply_discord_secrets
+
 CONFIG_YML = "config.yml"
 CONFIG_JSON = os.path.join("data", "gold_xauusd", "event_config.json")
 
@@ -36,7 +38,7 @@ def load_discord_config() -> dict:
         except Exception:
             pass
 
-    return conf
+    return apply_discord_secrets(conf)
 
 
 def html_to_discord(text: str) -> str:
