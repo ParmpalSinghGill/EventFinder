@@ -646,7 +646,7 @@ HTML_TEMPLATE = """
                 <input type="number" step="0.05" min="0.01" max="5.0" id="gold_trigger_tol_pct" class="number-input" value="0.20"> <span style="color: var(--text-muted); font-size: 14px;">%</span>
             </div>
         </div>
-        <p class="hint">Two alerts: <b>NEAR</b> when price enters the trigger distance (default 0.20%), then 30-second checks until price <b>TOUCH</b>es the label or moves more than 0.30% away (back to 5-minute checks). A NEAR can fire again after a 0.30% pullback. A touched label is cancelled for the rest of the day.</p>
+        <p class="hint">Sleep: <b>5 min</b> normally. Inside <b>0.50%</b> of a label (no alert) → <b>1 min</b> checks. Inside the trigger distance (default <b>0.20%</b>) → <b>NEAR</b> alert and <b>30s</b> until <b>TOUCH</b>. Pull back past 0.30% → 1 min again; past 0.50% → 5 min. A touched label is cancelled for the rest of the day.</p>
     </div>
 
     <!-- Custom Gold Labels -->
@@ -656,9 +656,9 @@ HTML_TEMPLATE = """
         </div>
         <p class="hint">
             Add any prices you want watched. Same rules as the other gold labels:
-            Same two-stage watch as the other gold labels: NEAR at the trigger distance (default 0.20%)
-            starts 30-second checks; TOUCH sends “price touched the label”. If price moves more than 0.30%
-            away without a touch, checks go back to 5 minutes and NEAR can fire again.
+            Same watch as the other gold labels. Inside 0.50% → 1-minute checks (no alert).
+            NEAR at the trigger distance (default 0.20%) starts 30-second checks; TOUCH sends
+            “price touched the label”. Past 0.30% without a touch → 1 minute; past 0.50% → 5 minutes.
             The label is removed only when price trades through it.
         </p>
         <div class="custom-add-row">
@@ -815,10 +815,14 @@ HTML_TEMPLATE = """
 
             const mon = data.monitor || {};
             const watching = mon.watching || [];
+            const approaching = mon.approaching || [];
             const monEl = document.getElementById('monitor_status_text');
             if (monEl) {
-                if (watching.length && Number(mon.interval_sec) <= 30) {
+                const sec = Number(mon.interval_sec);
+                if (watching.length && sec <= 30) {
                     monEl.textContent = '30s WATCH: ' + watching.join(', ');
+                } else if (approaching.length || sec === 60) {
+                    monEl.textContent = '1m APPROACH: ' + (approaching.join(', ') || watching.join(', '));
                 } else {
                     monEl.textContent = 'SYSTEM ACTIVE & MONITORING (5 min)';
                 }

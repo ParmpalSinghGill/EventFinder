@@ -151,8 +151,8 @@ def send_event_trigger_alert(event_dict: dict):
         f"🎯 <b>Level Price</b>: <code>${lprice:,.2f}</code>\n"
         f"🟡 <b>Spot Price</b>: <code>${sprice:,.2f}</code>\n"
         f"📏 <b>Proximity Gap</b>: <code>{gap_pct:.2f}%</code> (Under 0.20%)\n"
-        "⏱ Watching every <b>30 seconds</b> until price touches this label "
-        "or moves more than <b>0.30%</b> away."
+        "⏱ Watching every <b>30 seconds</b> until price touches this label. "
+        "If it pulls back past <b>0.30%</b>, checks go to <b>1 minute</b> until <b>0.50%</b>."
     )
     return _broadcast(
         msg,

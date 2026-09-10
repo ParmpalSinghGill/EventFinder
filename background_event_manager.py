@@ -104,7 +104,7 @@ def send_laptop_startup_telegram():
 def main_loop():
     print("=" * 75)
     print(" BACKGROUND EVENT FINDER DAEMON STARTED")
-    print(" Runs 5-minute gold checks, or 30-second checks while price is near a label")
+    print(" Gold: 5 min, 1 min inside 0.50%, 30s inside 0.20%")
     print("=" * 75)
 
     # Send startup message when laptop turns on / daemon starts

@@ -41,8 +41,10 @@ DEFAULT_CONFIG = {
 }
 
 WATCH_EXIT_DIST = 0.0030         # 0.30% away: leave 30s watch and re-arm the near trigger
+APPROACH_DIST = 0.0050           # 0.50% away: 1-minute checks, no alert yet
 RETRIGGER_DIST = WATCH_EXIT_DIST  # alias used by chart replay
 MONITOR_FAST_SEC = 30
+MONITOR_APPROACH_SEC = 60
 MONITOR_SLOW_SEC = 300
 MONITOR_KEY = "_monitor"
 PREV_DAY_HIERARCHY_TOL = 0.0040  # 0.40% threshold: suppress Prev Day level if higher TF level is within 0.40%
@@ -488,7 +490,7 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
                          verbose: bool, send_alerts: bool,
                          bar_high: float, bar_low: float,
                          live_price: float = None):
-    """Two-stage trigger: NEAR (enter 0.20% band) then TOUCH (price hits the label)."""
+    """NEAR at 0.20% (30s), silent approach at 0.50% (1 min), TOUCH on the label."""
     for lvl in levels:
         lid = lvl["id"]
         lprice = float(lvl["price"])
@@ -497,6 +499,7 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
         close_dist = abs(current_price - lprice) / lprice
         near_dist = _proximity_frac(lprice, current_price, bar_high, bar_low, live_price)
         is_near = near_dist <= trigger_tol
+        is_approach = near_dist <= APPROACH_DIST
         touched = _level_touched(lvl, bar_high, bar_low, live_price)
 
         lvl_state = state.get(lid, {
@@ -504,14 +507,17 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
             "near_triggered": False,
             "touch_triggered": False,
             "watching": False,
+            "approaching": False,
             "last_price": current_price,
             "last_updated": current_time_str
         })
         near_triggered = bool(lvl_state.get("near_triggered", lvl_state.get("triggered", False)))
         touch_triggered = bool(lvl_state.get("touch_triggered", False))
+        approaching = False
+        watching = False
 
         if touch_triggered:
-            lvl_state["watching"] = False
+            pass
         elif touched:
             if not near_triggered:
                 evt = {
@@ -542,7 +548,6 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
             _fire_event(evt, new_events, show_events, send_alerts)
             touch_triggered = True
             lvl_state["touch_time"] = current_time_str
-            lvl_state["watching"] = False
         elif is_near:
             if not near_triggered:
                 evt = {
@@ -562,45 +567,74 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
             elif verbose and show_events:
                 print(f"  [WATCH 30s] {lname} (${lprice:,.2f}) -- Near, waiting for touch "
                       f"(Price gap: {close_dist*100:.2f}%)")
-            lvl_state["watching"] = True
+            watching = True
+        elif near_triggered and close_dist <= WATCH_EXIT_DIST:
+            watching = True
+            if verbose and show_events:
+                print(f"  [WATCH 30s] {lname} (${lprice:,.2f}) -- Still inside 0.30% "
+                      f"(Price gap: {close_dist*100:.2f}%)")
         else:
             if near_triggered and close_dist > WATCH_EXIT_DIST:
                 near_triggered = False
-                lvl_state["watching"] = False
                 if verbose and show_events:
                     print(f"  [RE-ARMED] {lname} (${lprice:,.2f}) -- Price moved {close_dist*100:.2f}% away "
-                          f"(>{WATCH_EXIT_DIST*100:.2f}%). Back to 5-minute checks.")
-            elif near_triggered:
-                lvl_state["watching"] = True
+                          f"(>{WATCH_EXIT_DIST*100:.2f}%).")
+            if is_approach or close_dist <= APPROACH_DIST:
+                approaching = True
                 if verbose and show_events:
-                    print(f"  [WATCH 30s] {lname} (${lprice:,.2f}) -- Still inside 0.30% "
+                    print(f"  [WATCH 1m] {lname} (${lprice:,.2f}) -- Inside 0.50% band, no alert yet "
                           f"(Price gap: {close_dist*100:.2f}%)")
-            else:
-                lvl_state["watching"] = False
 
         lvl_state["near_triggered"] = near_triggered
         lvl_state["touch_triggered"] = touch_triggered
         lvl_state["triggered"] = near_triggered
+        lvl_state["watching"] = watching
+        lvl_state["approaching"] = approaching and not watching and not touch_triggered
         lvl_state["last_price"] = current_price
         lvl_state["last_updated"] = current_time_str
         state[lid] = lvl_state
 
 
-def _write_monitor_meta(state: dict, last_levels: list, current_time_str: str) -> dict:
-    """Keep 30s polling only while a near-level is still uncrossed and not 0.30% away."""
+def _write_monitor_meta(state: dict, last_levels: list, current_price: float,
+                        current_time_str: str, trigger_tol: float) -> dict:
+    """30s if NEAR, 1 min if inside 0.50%, otherwise 5 min."""
     active_ids = {lvl["id"] for lvl in last_levels}
     watching = []
+    approaching = []
     for lid, st in list(state.items()):
         if lid.startswith("_") or not isinstance(st, dict):
             continue
-        if st.get("watching") and not st.get("touch_triggered"):
-            if lid in active_ids:
+        if lid not in active_ids or st.get("touch_triggered"):
+            st["watching"] = False
+            st["approaching"] = False
+            continue
+        if st.get("watching"):
+            watching.append(lid)
+        elif st.get("approaching"):
+            approaching.append(lid)
+
+    for lvl in last_levels:
+        lid = lvl["id"]
+        dist = abs(current_price - float(lvl["price"])) / float(lvl["price"])
+        if dist <= trigger_tol:
+            if lid not in watching:
                 watching.append(lid)
-            else:
-                st["watching"] = False
+        elif dist <= APPROACH_DIST:
+            if lid not in watching and lid not in approaching:
+                approaching.append(lid)
+                if isinstance(state.get(lid), dict):
+                    state[lid]["approaching"] = True
+
+    if watching:
+        interval = MONITOR_FAST_SEC
+    elif approaching:
+        interval = MONITOR_APPROACH_SEC
+    else:
+        interval = MONITOR_SLOW_SEC
     meta = {
-        "interval_sec": MONITOR_FAST_SEC if watching else MONITOR_SLOW_SEC,
+        "interval_sec": interval,
         "watching": watching,
+        "approaching": approaching,
         "updated": current_time_str
     }
     state[MONITOR_KEY] = meta
@@ -616,6 +650,8 @@ def read_monitor_interval() -> int:
         sec = MONITOR_SLOW_SEC
     if sec <= MONITOR_FAST_SEC:
         return MONITOR_FAST_SEC
+    if sec <= MONITOR_APPROACH_SEC:
+        return MONITOR_APPROACH_SEC
     return MONITOR_SLOW_SEC
 
 
@@ -639,13 +675,14 @@ def run_event_finder():
     print(f" COINDCX XAUUSDT EVENT FINDER (ACTIVE MONITOR)")
     print(f" Feed: {TICKER_SYMBOL}  (public candles, no API key)")
     print(f" Mode: {'VERBOSE / SHOW ALERTS' if show_events else 'SILENT / BACKGROUND LOGGING ONLY'}")
-    print(f" Near trigger: {trigger_tol * 100:.2f}%   Touch: label high/low   Watch exit: {WATCH_EXIT_DIST * 100:.2f}%")
+    print(f" Approach 0.50% → 1 min (silent)  |  Near {trigger_tol * 100:.2f}% → 30s + alert  |  "
+          f">0.30% → 1 min  |  >0.50% → 5 min  |  Touch: label high/low")
     print(f" CoinDCX Trade Link: {COINDCX_URL}")
     print(f" Timestamp (Local): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 75)
 
     prev_interval = read_monitor_interval()
-    df_daily, df_1m = fetch_latest_data(refresh_daily=(prev_interval > MONITOR_FAST_SEC))
+    df_daily, df_1m = fetch_latest_data(refresh_daily=(prev_interval >= MONITOR_SLOW_SEC))
     if df_1m.empty:
         print("[ERROR] No 1-minute intraday data available.")
         return
@@ -732,17 +769,22 @@ def run_event_finder():
     if today_high != float("-inf") and today_low != float("inf"):
         purge_crossed_custom_labels(current_price, today_high, today_low)
 
-    monitor = _write_monitor_meta(state, last_levels, current_time_str)
+    monitor = _write_monitor_meta(state, last_levels, current_price, current_time_str, trigger_tol)
     if show_events:
         print(f"\n Active Uncrossed Levels Tracked ({len(last_levels)} levels):")
         for l in sorted(last_levels, key=lambda x: x["price"], reverse=True):
             gap_pct = ((l["price"] - current_price) / current_price) * 100
             print(f"   * [{l['timeframe']}] {l['name']}: ${l['price']:,.2f} (Gap: {gap_pct:+.2f}%)")
         watching = monitor.get("watching") or []
+        approaching = monitor.get("approaching") or []
+        interval = int(monitor.get("interval_sec") or MONITOR_SLOW_SEC)
         if watching:
             print(f"\n 30-second watch ON for: {', '.join(watching)}")
+        elif approaching:
+            print(f"\n 1-minute approach watch ON for: {', '.join(approaching)}")
         else:
             print("\n Next check: 5 minutes")
+        print(f" Sleep interval: {interval}s")
 
     save_state(state)
 
