@@ -118,13 +118,20 @@ def send_startup_summary(current_price: float, resistances: list, supports: list
 
 
 def send_event_trigger_alert(event_dict: dict):
-    """NEAR: price entered the 0.20% band. TOUCH: price actually hit the label."""
+    """NEAR: price entered the trigger band. TOUCH: price actually hit the label."""
+    from xauusd_event_finder import _fmt_pct, event_settings
+
     lname = event_dict.get("level_name", "Key Level")
     ltf = event_dict.get("timeframe", "Daily")
     lprice = event_dict.get("level_price", 0.0)
     sprice = event_dict.get("spot_price", 0.0)
     gap_pct = event_dict.get("dist_pct", 0.0)
     status = str(event_dict.get("status") or "NEAR").upper()
+    st = event_settings()
+    near_pct = _fmt_pct(st["gold_trigger_tol"])
+    watch_pct = _fmt_pct(st["watch_exit_dist"])
+    rs = int(st["near_retrigger_sec"])
+    retrigger_txt = f"{rs // 3600} hour" if rs % 3600 == 0 else f"{max(1, rs // 60)} min"
 
     if status == "TOUCH":
         msg = (
@@ -152,7 +159,8 @@ def send_event_trigger_alert(event_dict: dict):
         f"🟡 <b>Spot Price</b>: <code>${sprice:,.2f}</code>\n"
         f"📏 <b>Proximity Gap</b>: <code>{gap_pct:.2f}%</code>\n"
         "⏱ Watching every <b>30 seconds</b> until price touches this label. "
-        "If it pulls back past <b>0.30%</b>, checks go to <b>1 minute</b> until <b>0.50%</b>."
+        f"If it pulls back past <b>{watch_pct}%</b>, NEAR can fire again on the next {near_pct}% visit. "
+        f"If it stays inside <b>{watch_pct}%</b>, NEAR repeats after <b>{retrigger_txt}</b> without a touch."
     )
     return _broadcast(
         msg,

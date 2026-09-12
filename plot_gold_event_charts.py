@@ -17,10 +17,9 @@ from matplotlib.patches import Rectangle
 
 from coindcx_gold import DAILY_CSV, drop_weekend_bars, fetch_daily, fetch_minutes
 from find_labels import find_labels, nearest_levels
-from xauusd_event_finder import PREV_DAY_HIERARCHY_TOL, RETRIGGER_DIST, TIMEFRAMES
+from xauusd_event_finder import TIMEFRAMES, event_settings
 
 OUT_DIR = os.path.join("data", "gold_xauusd", "event_charts")
-TRIGGER_TOL = 0.0020
 REPLAY_HOURS = 7 * 24 + 12  # 7 days + buffer
 IST = "Asia/Kolkata"
 
@@ -109,6 +108,7 @@ def _source_meta(date, field: str, tf_name: str) -> dict:
 
 
 def compute_levels_from_pivots(frames: dict, current_price: float, today_high: float, today_low: float) -> list:
+    pd_tol = event_settings()["prev_day_hierarchy_tol"]
     higher_tf_levels = []
     daily_levels = []
     for tf_key, _tf_label, _ in TIMEFRAMES:
@@ -151,7 +151,7 @@ def compute_levels_from_pivots(frames: dict, current_price: float, today_high: f
     valid_prev_day = []
     for pd_lvl in candidate_prev_day:
         pd_price = pd_lvl["price"]
-        if not any(abs(htf["price"] - pd_price) / pd_price <= PREV_DAY_HIERARCHY_TOL for htf in higher_tf_levels):
+        if not any(abs(htf["price"] - pd_price) / pd_price <= pd_tol for htf in higher_tf_levels):
             valid_prev_day.append(pd_lvl)
     return higher_tf_levels + daily_levels + valid_prev_day
 
@@ -163,6 +163,9 @@ def replay_last_7_days(daily: pd.DataFrame, minutes_utc: pd.DataFrame) -> list:
     cutoff = minutes_utc.index.max() - pd.Timedelta(days=7)
     bars = minutes_utc.loc[minutes_utc.index >= cutoff].copy()
     print(f"Replaying {len(bars)} x 1-min CoinDCX bars  {bars.index.min()} -> {bars.index.max()} UTC")
+    s = event_settings()
+    trigger_tol = s["gold_trigger_tol"]
+    retrigger_dist = s["watch_exit_dist"]
 
     state = {}
     events = []
@@ -199,7 +202,7 @@ def replay_last_7_days(daily: pd.DataFrame, minutes_utc: pd.DataFrame) -> list:
             dist = abs(px - lprice) / lprice
             st = state.get(lid, {"triggered": False})
             was = st.get("triggered", False)
-            if dist <= TRIGGER_TOL:
+            if dist <= trigger_tol:
                 if not was:
                     ts_ist = ts.tz_convert(IST)
                     events.append({
@@ -219,7 +222,7 @@ def replay_last_7_days(daily: pd.DataFrame, minutes_utc: pd.DataFrame) -> list:
                         "source_tf": lvl.get("source_tf", lvl["timeframe"]),
                     })
                     st["triggered"] = True
-            elif was and dist > RETRIGGER_DIST:
+            elif was and dist > retrigger_dist:
                 st["triggered"] = False
             state[lid] = st
 
@@ -319,7 +322,8 @@ def plot_event(daily: pd.DataFrame, minutes: pd.DataFrame, event: dict, idx: int
         src_d = pd.Timestamp(event["source_date"])
         source_box = f"LIQUIDITY  {src_d.strftime('%d %b')} {event['source_field']}"
     level_ls = "--" if event["typ"] == "support" else "-"
-    band_lo, band_hi = price * (1 - TRIGGER_TOL), price * (1 + TRIGGER_TOL)
+    trigger_tol = event_settings()["gold_trigger_tol"]
+    band_lo, band_hi = price * (1 - trigger_tol), price * (1 + trigger_tol)
 
     fig = plt.figure(figsize=(16.5, 13.5), facecolor="#0b0e14")
     gs = fig.add_gridspec(4, 1, height_ratios=[3.2, 1.0, 3.2, 1.0], hspace=0.08)

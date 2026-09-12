@@ -8,14 +8,23 @@ data:
   update_hourly_eod: false
   update_hourly_intraday: false
   workers: 8
+event_finder:
+  # All gold distances are fractions: 0.002 = 0.20%. Edit here — one place.
+  run_gold_event_finder: true
+  show_gold_events: true
+  run_stock_event_finder: true
+  show_stock_events: false
+  gold_trigger_tol: 0.002          # NEAR when within this of a level (0.20%)
+  watch_exit_dist: 0.004           # leave 30s watch + re-arm NEAR (0.40%)
+  approach_dist: 0.005             # silent 1-minute checks (0.50%)
+  session_extreme_arm: 0.01        # Today's High/Low arm after this move (1%)
+  near_retrigger_sec: 3600         # NEAR again after this if still inside watch_exit_dist
+  monitor_fast_sec: 30
+  monitor_approach_sec: 60
+  monitor_slow_sec: 300
+  prev_day_hierarchy_tol: 0.004    # hide PDH/PDL if a higher-TF level is this close
 discord:
   enable_discord: true
-event_finder:
-  gold_trigger_tol: 0.002
-  run_gold_event_finder: true
-  run_stock_event_finder: true
-  show_gold_events: true
-  show_stock_events: false
 market:
   close: '15:30'
   open: 09:15

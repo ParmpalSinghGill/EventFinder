@@ -35,20 +35,41 @@ CUSTOM_LABELS_JSON = os.path.join(DATA_DIR, "custom_labels.json")
 DEFAULT_CONFIG = {
     "run_gold_event_finder": True,
     "show_gold_events": True,
-    "gold_trigger_tol": 0.0020,
     "run_stock_event_finder": True,
-    "show_stock_events": True
+    "show_stock_events": True,
+    "gold_trigger_tol": 0.0020,          # 0.20% — NEAR when inside this of a level
+    "watch_exit_dist": 0.0040,           # 0.40% — leave 30s watch and re-arm NEAR immediately
+    "approach_dist": 0.0050,             # 0.50% — silent 1-minute checks
+    "session_extreme_arm": 0.01,         # 1% — Today's High/Low arm after this move
+    "near_retrigger_sec": 3600,          # 1h — NEAR again only while still inside watch_exit_dist
+    "monitor_fast_sec": 30,
+    "monitor_approach_sec": 60,
+    "monitor_slow_sec": 300,
+    "prev_day_hierarchy_tol": 0.0040,    # 0.40% — hide PDH/PDL if a higher-TF level is this close
 }
 
-WATCH_EXIT_DIST = 0.0030         # 0.30% away: leave 30s watch and re-arm the near trigger
-APPROACH_DIST = 0.0050           # 0.50% away: 1-minute checks, no alert yet
-SESSION_EXTREME_ARM_DIST = 0.02  # 2% pullback from today's high / rally from today's low before it is a watched level
-RETRIGGER_DIST = WATCH_EXIT_DIST  # alias used by chart replay
-MONITOR_FAST_SEC = 30
-MONITOR_APPROACH_SEC = 60
-MONITOR_SLOW_SEC = 300
+_FLOAT_KEYS = {
+    "gold_trigger_tol", "watch_exit_dist", "approach_dist",
+    "session_extreme_arm", "prev_day_hierarchy_tol",
+}
+_INT_KEYS = {
+    "near_retrigger_sec", "monitor_fast_sec",
+    "monitor_approach_sec", "monitor_slow_sec",
+}
+
+# Module aliases — always match DEFAULT_CONFIG / last event_settings() load.
+WATCH_EXIT_DIST = DEFAULT_CONFIG["watch_exit_dist"]
+APPROACH_DIST = DEFAULT_CONFIG["approach_dist"]
+SESSION_EXTREME_ARM_DIST = DEFAULT_CONFIG["session_extreme_arm"]
+RETRIGGER_DIST = WATCH_EXIT_DIST
+NEAR_RETRIGGER_SEC = DEFAULT_CONFIG["near_retrigger_sec"]
+MONITOR_FAST_SEC = DEFAULT_CONFIG["monitor_fast_sec"]
+MONITOR_APPROACH_SEC = DEFAULT_CONFIG["monitor_approach_sec"]
+MONITOR_SLOW_SEC = DEFAULT_CONFIG["monitor_slow_sec"]
 MONITOR_KEY = "_monitor"
-PREV_DAY_HIERARCHY_TOL = 0.0040  # 0.40% threshold: suppress Prev Day level if higher TF level is within 0.40%
+PREV_DAY_HIERARCHY_TOL = DEFAULT_CONFIG["prev_day_hierarchy_tol"]
+
+_SETTINGS_CACHE = None
 
 TIMEFRAMES = [
     ("2Y", "2-Year",  to_2yearly),
@@ -79,6 +100,47 @@ def load_dynamic_config() -> dict:
             pass
 
     return conf
+
+
+def _fmt_pct(frac: float) -> str:
+    return f"{float(frac) * 100:.2f}"
+
+
+def event_settings(refresh: bool = False) -> dict:
+    """Resolved event-finder settings from DEFAULT_CONFIG → config.yml → event_config.json."""
+    global _SETTINGS_CACHE
+    global WATCH_EXIT_DIST, APPROACH_DIST, SESSION_EXTREME_ARM_DIST, RETRIGGER_DIST
+    global NEAR_RETRIGGER_SEC, MONITOR_FAST_SEC, MONITOR_APPROACH_SEC, MONITOR_SLOW_SEC
+    global PREV_DAY_HIERARCHY_TOL
+
+    if _SETTINGS_CACHE is not None and not refresh:
+        return _SETTINGS_CACHE
+
+    raw = load_dynamic_config()
+    s = {}
+    for key, default in DEFAULT_CONFIG.items():
+        val = raw.get(key, default)
+        try:
+            if key in _FLOAT_KEYS:
+                s[key] = float(val)
+            elif key in _INT_KEYS:
+                s[key] = int(val)
+            else:
+                s[key] = val
+        except (TypeError, ValueError):
+            s[key] = default
+
+    WATCH_EXIT_DIST = s["watch_exit_dist"]
+    APPROACH_DIST = s["approach_dist"]
+    SESSION_EXTREME_ARM_DIST = s["session_extreme_arm"]
+    RETRIGGER_DIST = WATCH_EXIT_DIST
+    NEAR_RETRIGGER_SEC = s["near_retrigger_sec"]
+    MONITOR_FAST_SEC = s["monitor_fast_sec"]
+    MONITOR_APPROACH_SEC = s["monitor_approach_sec"]
+    MONITOR_SLOW_SEC = s["monitor_slow_sec"]
+    PREV_DAY_HIERARCHY_TOL = s["prev_day_hierarchy_tol"]
+    _SETTINGS_CACHE = s
+    return s
 
 
 def fetch_latest_data(refresh_daily: bool = True):
@@ -283,7 +345,7 @@ def _merge_unique_level(levels: list, lvl: dict):
 
 
 def session_display_levels(today_high: float, today_low: float, current_price: float) -> list:
-    """Always list today's high/low on the dashboard, even before the 2% event-arming move."""
+    """Always list today's high/low on the dashboard, even before the event-arming move."""
     levels = []
     if _is_valid_px(today_high):
         high = float(today_high)
@@ -349,8 +411,8 @@ def extra_display_pivots(engine: dict, current_price: float,
 def get_all_active_levels(df_daily: pd.DataFrame, df_1m: pd.DataFrame, current_price: float) -> list:
     """Uncrossed labels plus remaining custom labels.
 
-    Today's high/low are included only after price has moved 2% away
-    (same rule as the event finder).
+    Today's high/low are included only after price has moved the configured
+    arm distance away (same rule as the event finder).
     """
     engine = _prepare_level_engine(df_daily)
     today_high, today_low = session_high_low(df_daily, df_1m)
@@ -365,7 +427,8 @@ def get_all_active_levels(df_daily: pd.DataFrame, df_1m: pd.DataFrame, current_p
 
     levels = []
     if engine is not None and today_high is not None and today_low is not None:
-        levels = _levels_from_engine(engine, current_price, today_high, today_low)
+        armed = session_arm_from_minute_bars(df_daily, df_1m, current_price)
+        levels = _levels_from_engine(engine, current_price, today_high, today_low, armed)
         custom = purge_crossed_custom_labels(current_price, today_high, today_low)
     else:
         custom = load_custom_labels()
@@ -408,7 +471,10 @@ def _prepare_level_engine(df_daily: pd.DataFrame) -> dict | None:
 
 
 def _levels_from_engine(engine: dict, current_price: float,
-                        today_high: float, today_low: float) -> list:
+                        today_high: float, today_low: float,
+                        armed: dict | None = None) -> list:
+    s = event_settings()
+    pd_tol = s["prev_day_hierarchy_tol"]
     higher_tf_levels = []
     daily_levels = []
 
@@ -463,14 +529,14 @@ def _levels_from_engine(engine: dict, current_price: float,
     for pd_lvl in candidate_prev_day:
         pd_price = pd_lvl["price"]
         has_nearby_higher_tf = any(
-            abs(htf["price"] - pd_price) / pd_price <= PREV_DAY_HIERARCHY_TOL
+            abs(htf["price"] - pd_price) / pd_price <= pd_tol
             for htf in higher_tf_levels
         )
         if not has_nearby_higher_tf:
             valid_prev_day_levels.append(pd_lvl)
 
     return (higher_tf_levels + daily_levels + valid_prev_day_levels
-            + session_extreme_levels(today_high, today_low, current_price))
+            + session_extreme_levels(today_high, today_low, current_price, armed))
 
 
 def _is_valid_px(px) -> bool:
@@ -481,47 +547,94 @@ def _is_valid_px(px) -> bool:
     return value > 0 and value != float("inf")
 
 
-def session_extreme_levels(today_high: float, today_low: float, current_price: float) -> list:
-    """Arm today's high/low once the session has already moved 2% away — then keep them.
+def _same_px(a, b) -> bool:
+    if a is None or b is None:
+        return False
+    try:
+        return round(float(a), 2) == round(float(b), 2)
+    except (TypeError, ValueError):
+        return False
 
-    Today's high becomes resistance after a 2% drop (from current price or from the
-    session low). Today's low becomes support after a 2% rally (from current price
-    or from the session high). Coming back inside 2% does not remove the level;
-    that is the retest (0.50% / 0.20% / touch). A new session high/low starts over.
+
+def _new_session_arm() -> dict:
+    return {"high": None, "low": None}
+
+
+def update_session_extreme_arm(armed: dict, today_high, today_low, current_price) -> dict:
+    """Arm Today's High/Low only after *current* price has been the arm distance away.
+
+    Making a new low while the session high is far above does not count. A new
+    high/low starts unarmed. Once this exact high/low is armed, it stays armed
+    so a later 0.20% retest can fire.
     """
-    levels = []
-    if not _is_valid_px(current_price):
-        return levels
-    px = float(current_price)
+    if not isinstance(armed, dict):
+        armed = _new_session_arm()
+    arm = event_settings()["session_extreme_arm"]
+    px = float(current_price) if _is_valid_px(current_price) else None
     high = float(today_high) if _is_valid_px(today_high) else None
     low = float(today_low) if _is_valid_px(today_low) else None
 
-    if high is not None:
-        # Resistance only after *current* price is 2% below the high. A print 0.5%
-        # under the high is still the high being formed, not a retest from away.
+    if high is None or not _same_px(armed.get("high"), high):
+        armed["high"] = None
+    if low is None or not _same_px(armed.get("low"), low):
+        armed["low"] = None
+
+    if px is not None and high is not None:
         drop_now = (high - px) / high if px < high else 0.0
-        if drop_now >= SESSION_EXTREME_ARM_DIST:
-            levels.append({
-                "id": f"TH_{high:.2f}",
-                "timeframe": "Today",
-                "name": "Today's High",
-                "type": "resistance",
-                "price": high
-            })
-    if low is not None:
-        # Support once the session has already rallied 2% off this low (up to the
-        # session high counts). Price coming back toward the low is the retest.
+        if drop_now >= arm:
+            armed["high"] = high
+    if px is not None and low is not None:
         rally_now = (px - low) / low if px > low else 0.0
-        rally_session = (high - low) / low if high is not None else rally_now
-        if max(rally_now, rally_session) >= SESSION_EXTREME_ARM_DIST:
-            levels.append({
-                "id": f"TL_{low:.2f}",
-                "timeframe": "Today",
-                "name": "Today's Low",
-                "type": "support",
-                "price": low
-            })
+        if rally_now >= arm:
+            armed["low"] = low
+    return armed
+
+
+def session_extreme_levels(today_high: float, today_low: float, current_price: float,
+                           armed: dict | None = None) -> list:
+    """List Today's High/Low only after they have been armed by a 1% (config) move away."""
+    levels = []
+    armed = armed if isinstance(armed, dict) else _new_session_arm()
+    high = float(today_high) if _is_valid_px(today_high) else None
+    low = float(today_low) if _is_valid_px(today_low) else None
+
+    if high is not None and _same_px(armed.get("high"), high):
+        levels.append({
+            "id": f"TH_{high:.2f}",
+            "timeframe": "Today",
+            "name": "Today's High",
+            "type": "resistance",
+            "price": high
+        })
+    if low is not None and _same_px(armed.get("low"), low):
+        levels.append({
+            "id": f"TL_{low:.2f}",
+            "timeframe": "Today",
+            "name": "Today's Low",
+            "type": "support",
+            "price": low
+        })
     return levels
+
+
+def session_arm_from_minute_bars(df_daily: pd.DataFrame, df_1m: pd.DataFrame,
+                                 current_price: float = None) -> dict:
+    """Replay today's 1-minute bars to see which session extremes have been armed."""
+    armed = _new_session_arm()
+    minute = session_minute_bars(df_daily, df_1m)
+    today_high = float("-inf")
+    today_low = float("inf")
+    if minute is not None and not minute.empty:
+        for row in minute.itertuples(index=False):
+            bar_high = float(row.High)
+            bar_low = float(row.Low)
+            px = float(row.Close)
+            today_high = bar_high if today_high == float("-inf") else max(today_high, bar_high)
+            today_low = bar_low if today_low == float("inf") else min(today_low, bar_low)
+            update_session_extreme_arm(armed, today_high, today_low, px)
+    if _is_valid_px(current_price) and today_high != float("-inf"):
+        update_session_extreme_arm(armed, today_high, today_low, current_price)
+    return armed
 
 
 def compute_stock_screener_levels(df_daily: pd.DataFrame, df_1m: pd.DataFrame,
@@ -541,7 +654,10 @@ def compute_stock_screener_levels(df_daily: pd.DataFrame, df_1m: pd.DataFrame,
             today_high = max(today_high, float(minute["High"].max()))
             today_low = min(today_low, float(minute["Low"].min()))
 
-    return _levels_from_engine(engine, current_price, today_high, today_low)
+    return _levels_from_engine(
+        engine, current_price, today_high, today_low,
+        session_arm_from_minute_bars(df_daily, df_1m, current_price)
+    )
 
 
 def load_state() -> dict:
@@ -581,6 +697,29 @@ def _proximity_frac(lprice: float, current_price: float,
 
 def _close_dist_frac(lprice: float, current_price: float) -> float:
     return abs(float(current_price) - lprice) / lprice
+
+
+def _seconds_between(prev_str, now_str):
+    """Elapsed seconds from one event timestamp string to another, or None if unparseable."""
+    a = pd.to_datetime(prev_str, errors="coerce")
+    b = pd.to_datetime(now_str, errors="coerce")
+    if pd.isna(a) or pd.isna(b):
+        return None
+    if a.tzinfo is not None or b.tzinfo is not None:
+        a = a.tz_localize("UTC") if a.tzinfo is None else a.tz_convert("UTC")
+        b = b.tz_localize("UTC") if b.tzinfo is None else b.tz_convert("UTC")
+    return float((b - a).total_seconds())
+
+
+def _near_alert_due(near_triggered: bool, lvl_state: dict, current_time_str: str) -> bool:
+    """First NEAR, or 1 hour since last NEAR while price never left the watch-exit band."""
+    if not near_triggered:
+        return True
+    prev = lvl_state.get("near_time") or lvl_state.get("last_updated")
+    sec = _seconds_between(prev, current_time_str)
+    if sec is None:
+        return False
+    return sec >= NEAR_RETRIGGER_SEC
 
 
 def _level_touched(lvl: dict, bar_high: float, bar_low: float,
@@ -653,7 +792,15 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
                          bar_high: float, bar_low: float,
                          live_price: float = None,
                          allow_rearm: bool = True):
-    """NEAR at 0.20% (30s), silent approach at 0.50% (1 min), TOUCH on the label."""
+    """NEAR at trigger_tol (30s), silent approach, TOUCH on the label.
+
+    If price leaves more than watch_exit_dist and later comes back inside
+    trigger_tol, NEAR fires again immediately. The 1-hour repeat applies only
+    while price stays inside watch_exit_dist without a touch.
+    """
+    s = event_settings()
+    watch_exit = s["watch_exit_dist"]
+    approach = s["approach_dist"]
     for lvl in levels:
         lid = lvl["id"]
         lprice = float(lvl["price"])
@@ -662,7 +809,7 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
         close_dist = _close_dist_frac(lprice, current_price)
         near_dist = _proximity_frac(lprice, current_price, bar_high, bar_low, live_price)
         is_near = near_dist <= trigger_tol
-        is_approach = near_dist <= APPROACH_DIST
+        is_approach = near_dist <= approach
         touched = _level_touched(lvl, bar_high, bar_low, live_price)
 
         lvl_state = state.get(lid, {
@@ -679,24 +826,28 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
         approaching = False
         watching = False
 
+        def _emit_near():
+            nonlocal near_triggered
+            evt = {
+                "timestamp": current_time_str,
+                "level_id": lid,
+                "level_name": lname,
+                "timeframe": ltf,
+                "level_price": round(lprice, 2),
+                "spot_price": round(current_price, 2),
+                "dist_pct": round(close_dist * 100, 3),
+                "status": "NEAR",
+                "trade_link": COINDCX_URL
+            }
+            _fire_event(evt, new_events, show_events, send_alerts)
+            near_triggered = True
+            lvl_state["near_time"] = current_time_str
+
         if touch_triggered:
             pass
         elif touched:
-            if not near_triggered:
-                evt = {
-                    "timestamp": current_time_str,
-                    "level_id": lid,
-                    "level_name": lname,
-                    "timeframe": ltf,
-                    "level_price": round(lprice, 2),
-                    "spot_price": round(current_price, 2),
-                    "dist_pct": round(close_dist * 100, 3),
-                    "status": "NEAR",
-                    "trade_link": COINDCX_URL
-                }
-                _fire_event(evt, new_events, show_events, send_alerts)
-                near_triggered = True
-                lvl_state["near_time"] = current_time_str
+            if _near_alert_due(near_triggered, lvl_state, current_time_str):
+                _emit_near()
             evt = {
                 "timestamp": current_time_str,
                 "level_id": lid,
@@ -712,40 +863,27 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
             touch_triggered = True
             lvl_state["touch_time"] = current_time_str
         elif is_near:
-            if not near_triggered:
-                evt = {
-                    "timestamp": current_time_str,
-                    "level_id": lid,
-                    "level_name": lname,
-                    "timeframe": ltf,
-                    "level_price": round(lprice, 2),
-                    "spot_price": round(current_price, 2),
-                    "dist_pct": round(close_dist * 100, 3),
-                    "status": "NEAR",
-                    "trade_link": COINDCX_URL
-                }
-                _fire_event(evt, new_events, show_events, send_alerts)
-                near_triggered = True
-                lvl_state["near_time"] = current_time_str
+            if _near_alert_due(near_triggered, lvl_state, current_time_str):
+                _emit_near()
             elif verbose and show_events:
                 print(f"  [WATCH 30s] {lname} (${lprice:,.2f}) -- Near, waiting for touch "
                       f"(Price gap: {close_dist*100:.2f}%)")
             watching = True
-        elif near_triggered and close_dist <= WATCH_EXIT_DIST:
+        elif near_triggered and close_dist <= watch_exit:
             watching = True
             if verbose and show_events:
-                print(f"  [WATCH 30s] {lname} (${lprice:,.2f}) -- Still inside 0.30% "
+                print(f"  [WATCH 30s] {lname} (${lprice:,.2f}) -- Still inside {_fmt_pct(watch_exit)}% "
                       f"(Price gap: {close_dist*100:.2f}%)")
         else:
-            if allow_rearm and near_triggered and close_dist > WATCH_EXIT_DIST:
+            if allow_rearm and near_triggered and close_dist > watch_exit:
                 near_triggered = False
                 if verbose and show_events:
                     print(f"  [RE-ARMED] {lname} (${lprice:,.2f}) -- Price moved {close_dist*100:.2f}% away "
-                          f"(>{WATCH_EXIT_DIST*100:.2f}%).")
-            if is_approach or close_dist <= APPROACH_DIST:
+                          f"(>{_fmt_pct(watch_exit)}%). Next {_fmt_pct(trigger_tol)}% visit will NEAR again.")
+            if is_approach or close_dist <= approach:
                 approaching = True
                 if verbose and show_events:
-                    print(f"  [WATCH 1m] {lname} (${lprice:,.2f}) -- Inside 0.50% band, no alert yet "
+                    print(f"  [WATCH 1m] {lname} (${lprice:,.2f}) -- Inside {_fmt_pct(approach)}% band, no alert yet "
                           f"(Price gap: {close_dist*100:.2f}%)")
 
         lvl_state["near_triggered"] = near_triggered
@@ -761,6 +899,9 @@ def _scan_bar_for_events(levels: list, state: dict, current_price: float,
 def _reconcile_watch_from_spot(levels: list, state: dict, current_price: float,
                                trigger_tol: float):
     """Watch flags follow the live/last price, not an earlier wick in the session."""
+    s = event_settings()
+    watch_exit = s["watch_exit_dist"]
+    approach = s["approach_dist"]
     for lvl in levels:
         lid = lvl["id"]
         st = state.get(lid)
@@ -770,13 +911,13 @@ def _reconcile_watch_from_spot(levels: list, state: dict, current_price: float,
         if dist <= trigger_tol:
             st["watching"] = True
             st["approaching"] = False
-        elif dist <= WATCH_EXIT_DIST and st.get("near_triggered"):
+        elif dist <= watch_exit and st.get("near_triggered"):
             st["watching"] = True
             st["approaching"] = False
-        elif dist <= APPROACH_DIST:
+        elif dist <= approach:
             st["watching"] = False
             st["approaching"] = True
-            if dist > WATCH_EXIT_DIST:
+            if dist > watch_exit:
                 st["near_triggered"] = False
                 st["triggered"] = False
         else:
@@ -790,7 +931,10 @@ def _reconcile_watch_from_spot(levels: list, state: dict, current_price: float,
 def _write_monitor_meta(state: dict, last_levels: list, current_price: float,
                         current_time_str: str, trigger_tol: float,
                         last_scanned: str = None) -> dict:
-    """30s if NEAR, 1 min if inside 0.50%, otherwise 5 min. Interval follows live/close, not an old wick."""
+    """30s if NEAR, 1 min if inside approach band, otherwise slow interval."""
+    s = event_settings()
+    watch_exit = s["watch_exit_dist"]
+    approach = s["approach_dist"]
     active_ids = {lvl["id"] for lvl in last_levels}
     watching = []
     approaching = []
@@ -807,19 +951,19 @@ def _write_monitor_meta(state: dict, last_levels: list, current_price: float,
         if st.get("touch_triggered"):
             continue
         dist = _close_dist_frac(float(lvl["price"]), current_price)
-        if dist <= trigger_tol or (dist <= WATCH_EXIT_DIST and st.get("near_triggered")):
+        if dist <= trigger_tol or (dist <= watch_exit and st.get("near_triggered")):
             watching.append(lid)
-        elif dist <= APPROACH_DIST:
+        elif dist <= approach:
             approaching.append(lid)
             if st:
                 st["approaching"] = True
 
     if watching:
-        interval = MONITOR_FAST_SEC
+        interval = s["monitor_fast_sec"]
     elif approaching:
-        interval = MONITOR_APPROACH_SEC
+        interval = s["monitor_approach_sec"]
     else:
-        interval = MONITOR_SLOW_SEC
+        interval = s["monitor_slow_sec"]
     meta = {
         "interval_sec": interval,
         "watching": watching,
@@ -838,24 +982,32 @@ def _write_monitor_meta(state: dict, last_levels: list, current_price: float,
 
 def read_monitor_interval() -> int:
     """Seconds the background daemon should sleep until the next gold check."""
+    s = event_settings()
+    slow = s["monitor_slow_sec"]
+    fast = s["monitor_fast_sec"]
+    approach = s["monitor_approach_sec"]
     state = load_state()
     try:
-        sec = int((state.get(MONITOR_KEY) or {}).get("interval_sec") or MONITOR_SLOW_SEC)
+        sec = int((state.get(MONITOR_KEY) or {}).get("interval_sec") or slow)
     except (TypeError, ValueError):
-        sec = MONITOR_SLOW_SEC
-    if sec <= MONITOR_FAST_SEC:
-        return MONITOR_FAST_SEC
-    if sec <= MONITOR_APPROACH_SEC:
-        return MONITOR_APPROACH_SEC
-    return MONITOR_SLOW_SEC
+        sec = slow
+    if sec <= fast:
+        return fast
+    if sec <= approach:
+        return approach
+    return slow
 
 
 def run_event_finder():
-    conf = load_dynamic_config()
-    
-    run_gold = bool(conf.get("run_gold_event_finder", True))
-    show_events = bool(conf.get("show_gold_events", True))
-    trigger_tol = float(conf.get("gold_trigger_tol", 0.0020))
+    s = event_settings(refresh=True)
+    run_gold = bool(s.get("run_gold_event_finder", True))
+    show_events = bool(s.get("show_gold_events", True))
+    trigger_tol = float(s["gold_trigger_tol"])
+    watch_exit = s["watch_exit_dist"]
+    approach = s["approach_dist"]
+    arm = s["session_extreme_arm"]
+    retrigger_sec = int(s["near_retrigger_sec"])
+    retrigger_txt = f"{retrigger_sec // 3600}h" if retrigger_sec % 3600 == 0 else f"{max(1, retrigger_sec // 60)} min"
 
     if not run_gold:
         print("\n[CONFIG NOTICE] Gold Event Finder is DISABLED. Skipping.")
@@ -870,15 +1022,19 @@ def run_event_finder():
     print(f" COINDCX XAUUSDT EVENT FINDER (ACTIVE MONITOR)")
     print(f" Feed: {TICKER_SYMBOL}  (public candles, no API key)")
     print(f" Mode: {'VERBOSE / SHOW ALERTS' if show_events else 'SILENT / BACKGROUND LOGGING ONLY'}")
-    print(f" Approach 0.50% → 1 min (silent)  |  Near {trigger_tol * 100:.2f}% → 30s + alert  |  "
-          f">0.30% → 1 min  |  >0.50% → 5 min  |  Touch: label high/low")
-    print(" Today's High/Low become levels only after a 2% move away, then the same watch/touch rules apply")
+    print(f" Approach {_fmt_pct(approach)}% → 1 min (silent)  |  "
+          f"Near {_fmt_pct(trigger_tol)}% → 30s + alert  |  "
+          f">{_fmt_pct(watch_exit)}% re-arms NEAR  |  "
+          f"stay inside {_fmt_pct(watch_exit)}% → NEAR again after {retrigger_txt}  |  "
+          f"Touch: label high/low")
+    print(f" Today's High/Low become levels only after a {_fmt_pct(arm)}% move away, "
+          "then the same watch/touch rules apply")
     print(f" CoinDCX Trade Link: {COINDCX_URL}")
     print(f" Timestamp (Local): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 75)
 
     prev_interval = read_monitor_interval()
-    df_daily, df_1m = fetch_latest_data(refresh_daily=(prev_interval >= MONITOR_SLOW_SEC))
+    df_daily, df_1m = fetch_latest_data(refresh_daily=(prev_interval >= s["monitor_slow_sec"]))
     if df_1m.empty:
         print("[ERROR] No 1-minute intraday data available.")
         return
@@ -914,6 +1070,7 @@ def run_event_finder():
     last_levels = []
     n_bars = len(session_1m)
     scanned_bars = 0
+    armed = _new_session_arm()
 
     session_start_ts = pd.to_datetime(session_1m.iloc[0][dt_col], utc=True)
     prev_monitor = state.get(MONITOR_KEY) if isinstance(state.get(MONITOR_KEY), dict) else {}
@@ -934,7 +1091,9 @@ def run_event_finder():
         if is_new:
             scanned_bars += 1
             send_alerts = bool(bar_ts >= latest_ts - alert_lookback)
-            last_levels = _levels_from_engine(engine, current_price, today_high, today_low)
+            last_levels = _levels_from_engine(
+                engine, current_price, today_high, today_low, armed
+            )
             live_custom = [
                 lab for lab in custom
                 if not _custom_label_crossed(float(lab["price"]), current_price, today_high, today_low)
@@ -943,10 +1102,11 @@ def run_event_finder():
             _scan_bar_for_events(
                 last_levels, state, current_price, current_time_str, trigger_tol,
                 new_events, show_events, verbose=is_last, send_alerts=send_alerts,
-                bar_high=bar_high, bar_low=bar_low, allow_rearm=is_last
+                bar_high=bar_high, bar_low=bar_low, allow_rearm=True
             )
         today_high = bar_high if today_high == float("-inf") else max(today_high, bar_high)
         today_low = bar_low if today_low == float("inf") else min(today_low, bar_low)
+        update_session_extreme_arm(armed, today_high, today_low, current_price)
 
     print(f" New 1-minute bars event-scanned: {scanned_bars}")
 
@@ -959,7 +1119,9 @@ def run_event_finder():
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         forming_high = max(forming_high, live_price)
         forming_low = min(forming_low, live_price)
-        last_levels = _levels_from_engine(engine, current_price, today_high, today_low)
+        last_levels = _levels_from_engine(
+            engine, current_price, today_high, today_low, armed
+        )
         live_custom = [
             lab for lab in custom
             if not _custom_label_crossed(float(lab["price"]), current_price, today_high, today_low)
@@ -974,10 +1136,13 @@ def run_event_finder():
         if today_high != float("-inf"):
             today_high = max(today_high, live_price)
             today_low = min(today_low, live_price)
+            update_session_extreme_arm(armed, today_high, today_low, live_price)
         print(f" Live CoinDCX last: ${live_price:,.2f}")
     except Exception as le:
         print(f"  [Live price warning]: {le}")
-        last_levels = _levels_from_engine(engine, current_price, today_high, today_low)
+        last_levels = _levels_from_engine(
+            engine, current_price, today_high, today_low, armed
+        )
         live_custom = [
             lab for lab in custom
             if not _custom_label_crossed(float(lab["price"]), current_price, today_high, today_low)

@@ -31,14 +31,34 @@ try:
     from telegram_notifier import (load_telegram_config,
                                    send_telegram_message)
     from xauusd_event_finder import (COINDCX_URL, EVENTS_CSV,
+                                     DEFAULT_CONFIG as GOLD_EVENT_DEFAULTS,
                                      add_custom_label,
                                      compute_stock_screener_levels,
                                      delete_custom_label,
+                                     event_settings,
                                      fetch_latest_data,
                                      get_all_active_levels,
-                                     session_high_low)
+                                     session_high_low,
+                                     _fmt_pct)
 except ImportError:
     COINDCX_URL = "https://coindcx.com/futures/B-XAU_USDT"
+    GOLD_EVENT_DEFAULTS = {
+        "run_gold_event_finder": True,
+        "show_gold_events": True,
+        "gold_trigger_tol": 0.0020,
+        "watch_exit_dist": 0.0040,
+        "approach_dist": 0.0050,
+        "session_extreme_arm": 0.01,
+        "near_retrigger_sec": 3600,
+        "monitor_fast_sec": 30,
+        "monitor_approach_sec": 60,
+        "monitor_slow_sec": 300,
+        "prev_day_hierarchy_tol": 0.0040,
+        "run_stock_event_finder": True,
+        "show_stock_events": True,
+    }
+    event_settings = lambda refresh=False: dict(GOLD_EVENT_DEFAULTS)
+    _fmt_pct = lambda frac: f"{float(frac) * 100:.2f}"
     apply_discord_secrets = lambda c: c
     apply_telegram_secrets = lambda c: c
     save_notification_secrets = lambda **_kw: None
@@ -51,11 +71,7 @@ CONFIG_YML = "config.yml"
 CONFIG_JSON = os.path.join("data", "gold_xauusd", "event_config.json")
 
 DEFAULT_CONFIG = {
-    "run_gold_event_finder": True,
-    "show_gold_events": True,
-    "gold_trigger_tol": 0.0020,
-    "run_stock_event_finder": True,
-    "show_stock_events": True,
+    **GOLD_EVENT_DEFAULTS,
     "telegram": {
         "enable_telegram": True,
         "bot_token": "",
@@ -136,13 +152,10 @@ def save_config(conf: dict):
             with open(CONFIG_YML, "r", encoding="utf-8") as f:
                 raw_yml = yaml.safe_load(f) or {}
 
-        raw_yml["event_finder"] = {
-            "run_gold_event_finder": conf.get("run_gold_event_finder", True),
-            "show_gold_events": conf.get("show_gold_events", True),
-            "gold_trigger_tol": conf.get("gold_trigger_tol", 0.0020),
-            "run_stock_event_finder": conf.get("run_stock_event_finder", True),
-            "show_stock_events": conf.get("show_stock_events", True)
-        }
+        existing_ef = dict(raw_yml.get("event_finder") or {})
+        for key, default in GOLD_EVENT_DEFAULTS.items():
+            existing_ef[key] = conf.get(key, existing_ef.get(key, default))
+        raw_yml["event_finder"] = existing_ef
         raw_yml["telegram"] = {
             "enable_telegram": (conf.get("telegram") or {}).get("enable_telegram", True)
         }
@@ -182,9 +195,11 @@ def get_gold_summary_data():
             pass
 
         levels = get_all_active_levels(df_daily, df_1m, current_price)
-        from xauusd_event_finder import (SESSION_EXTREME_ARM_DIST, extra_display_pivots,
+        from xauusd_event_finder import (extra_display_pivots,
+                                         session_arm_from_minute_bars,
                                          session_extreme_levels, _prepare_level_engine,
                                          _is_valid_px)
+        s = event_settings()
         th, tl = session_high_low(df_daily, df_1m)
         if _is_valid_px(current_price):
             if _is_valid_px(th):
@@ -192,7 +207,8 @@ def get_gold_summary_data():
             if _is_valid_px(tl):
                 tl = min(float(tl), float(current_price))
 
-        armed_ids = {l["id"] for l in session_extreme_levels(th, tl, current_price)}
+        armed = session_arm_from_minute_bars(df_daily, df_1m, current_price)
+        armed_ids = {l["id"] for l in session_extreme_levels(th, tl, current_price, armed)}
         high_gap = ((float(th) - current_price) / float(th) * 100) if _is_valid_px(th) else None
         low_gap = ((current_price - float(tl)) / float(tl) * 100) if _is_valid_px(tl) else None
         session_range = {
@@ -202,7 +218,7 @@ def get_gold_summary_data():
             "low_gap_pct": round(low_gap, 2) if low_gap is not None else None,
             "high_is_level": bool(th) and f"TH_{float(th):.2f}" in armed_ids,
             "low_is_level": bool(tl) and f"TL_{float(tl):.2f}" in armed_ids,
-            "arm_pct": round(SESSION_EXTREME_ARM_DIST * 100, 1)
+            "arm_pct": round(s["session_extreme_arm"] * 100, 1)
         }
 
         extras = []
@@ -714,7 +730,7 @@ HTML_TEMPLATE = """
                 <input type="number" step="0.05" min="0.01" max="5.0" id="gold_trigger_tol_pct" class="number-input" value="0.20"> <span style="color: var(--text-muted); font-size: 14px;">%</span>
             </div>
         </div>
-        <p class="hint">Sleep: <b>5 min</b> normally. Inside <b>0.50%</b> of a label (no alert) → <b>1 min</b> checks. Inside the trigger distance (default <b>0.20%</b>) → <b>NEAR</b> alert and <b>30s</b> until <b>TOUCH</b>. Pull back past 0.30% → 1 min again; past 0.50% → 5 min. A touched label is cancelled for the rest of the day. <b>Today's High</b> is added only after price drops <b>2%</b> from it; <b>Today's Low</b> only after price rallies <b>2%</b> from it. After that they use the same 0.50% / 0.20% / touch watch.</p>
+        <p class="hint">Sleep: <b>{{ slow_min }} min</b> normally. Inside <b>{{ approach_pct }}%</b> of a label (no alert) → <b>1 min</b> checks. Inside the trigger distance (default <b>{{ near_pct }}%</b>) → <b>NEAR</b> alert and <b>30s</b> until <b>TOUCH</b>. Pull back past <b>{{ watch_pct }}%</b> re-arms NEAR (next {{ near_pct }}% visit alerts again, even within {{ retrigger_txt }}). If price <b>stays inside {{ watch_pct }}%</b> without a touch, NEAR repeats after <b>{{ retrigger_txt }}</b>. A touched label is cancelled for the rest of the day. <b>Today's High</b> is added only after price drops <b>{{ arm_pct }}%</b> from it; <b>Today's Low</b> only after price rallies <b>{{ arm_pct }}%</b> from it. After that they use the same {{ approach_pct }}% / {{ near_pct }}% / touch watch. All of these are in <b>config.yml → event_finder</b>.</p>
     </div>
 
     <!-- Custom Gold Labels -->
@@ -724,9 +740,10 @@ HTML_TEMPLATE = """
         </div>
         <p class="hint">
             Add any prices you want watched. Same rules as the other gold labels:
-            Same watch as the other gold labels. Inside 0.50% → 1-minute checks (no alert).
-            NEAR at the trigger distance (default 0.20%) starts 30-second checks; TOUCH sends
-            “price touched the label”. Past 0.30% without a touch → 1 minute; past 0.50% → 5 minutes.
+            Same watch as the other gold labels. Inside {{ approach_pct }}% → 1-minute checks (no alert).
+            NEAR at the trigger distance (default {{ near_pct }}%) starts 30-second checks; TOUCH sends
+            “price touched the label”. Past {{ watch_pct }}% re-arms NEAR. If it stays inside {{ watch_pct }}% without
+            a touch, NEAR repeats after {{ retrigger_txt }}.
             The label is removed only when price trades through it.
         </p>
         <div class="custom-add-row">
@@ -852,14 +869,14 @@ HTML_TEMPLATE = """
             if (sr.high != null) {
                 document.getElementById('session_high_display').innerText = '$' + Number(sr.high).toLocaleString();
                 document.getElementById('session_high_note').innerText = sr.high_is_level
-                    ? `(${sr.high_gap_pct}% below — level, session already dropped ${arm}%)`
-                    : `(${sr.high_gap_pct}% below — not a level until ${arm}% drop)`;
+                    ? `(${sr.high_gap_pct}% below — level, price already dropped ${arm}% off this high)`
+                    : `(${sr.high_gap_pct}% below — not a level until price is ${arm}% below this high)`;
             }
             if (sr.low != null) {
                 document.getElementById('session_low_display').innerText = '$' + Number(sr.low).toLocaleString();
                 document.getElementById('session_low_note').innerText = sr.low_is_level
-                    ? `(${sr.low_gap_pct}% above — level, session already rallied ${arm}%)`
-                    : `(${sr.low_gap_pct}% above — not a level until ${arm}% rally)`;
+                    ? `(${sr.low_gap_pct}% above — level, price already rallied ${arm}% off this low)`
+                    : `(${sr.low_gap_pct}% above — not a level until price is ${arm}% above this low)`;
             }
 
             let resHtml = '';
@@ -1101,7 +1118,18 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    s = event_settings(refresh=True)
+    rs = int(s["near_retrigger_sec"])
+    retrigger_txt = f"{rs // 3600} hour" if rs % 3600 == 0 else f"{max(1, rs // 60)} min"
+    return render_template_string(
+        HTML_TEMPLATE,
+        near_pct=_fmt_pct(s["gold_trigger_tol"]),
+        watch_pct=_fmt_pct(s["watch_exit_dist"]),
+        approach_pct=_fmt_pct(s["approach_dist"]),
+        arm_pct=_fmt_pct(s["session_extreme_arm"]),
+        retrigger_txt=retrigger_txt,
+        slow_min=max(1, int(s["monitor_slow_sec"]) // 60),
+    )
 
 
 @app.route("/api/config", methods=["GET"])
