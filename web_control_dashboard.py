@@ -45,6 +45,8 @@ except ImportError:
 
 app = Flask(__name__)
 
+DASHBOARD_LEVEL_LIMIT = 5
+
 CONFIG_YML = "config.yml"
 CONFIG_JSON = os.path.join("data", "gold_xauusd", "event_config.json")
 
@@ -170,33 +172,89 @@ def get_gold_summary_data():
             current_price = float(latest_row["Close"])
             time_str = str(latest_row[dt_col])
 
+        try:
+            from xauusd_event_finder import fetch_live_price
+            live = float(fetch_live_price()["last"])
+            if live > 0:
+                current_price = live
+                time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " (live)"
+        except Exception:
+            pass
+
         levels = get_all_active_levels(df_daily, df_1m, current_price)
+        from xauusd_event_finder import (SESSION_EXTREME_ARM_DIST, extra_display_pivots,
+                                         session_extreme_levels, _prepare_level_engine,
+                                         _is_valid_px)
+        th, tl = session_high_low(df_daily, df_1m)
+        if _is_valid_px(current_price):
+            if _is_valid_px(th):
+                th = max(float(th), float(current_price))
+            if _is_valid_px(tl):
+                tl = min(float(tl), float(current_price))
 
-        resistances = [l for l in levels if l["price"] > current_price]
-        supports = [l for l in levels if l["price"] < current_price]
+        armed_ids = {l["id"] for l in session_extreme_levels(th, tl, current_price)}
+        high_gap = ((float(th) - current_price) / float(th) * 100) if _is_valid_px(th) else None
+        low_gap = ((current_price - float(tl)) / float(tl) * 100) if _is_valid_px(tl) else None
+        session_range = {
+            "high": round(float(th), 2) if _is_valid_px(th) else None,
+            "low": round(float(tl), 2) if _is_valid_px(tl) else None,
+            "high_gap_pct": round(high_gap, 2) if high_gap is not None else None,
+            "low_gap_pct": round(low_gap, 2) if low_gap is not None else None,
+            "high_is_level": bool(th) and f"TH_{float(th):.2f}" in armed_ids,
+            "low_is_level": bool(tl) and f"TL_{float(tl):.2f}" in armed_ids,
+            "arm_pct": round(SESSION_EXTREME_ARM_DIST * 100, 1)
+        }
 
-        resistances.sort(key=lambda l: l["price"])
-        supports.sort(key=lambda l: l["price"], reverse=True)
+        extras = []
+        try:
+            engine = _prepare_level_engine(df_daily)
+            extras = extra_display_pivots(engine, current_price, th, tl)
+        except Exception:
+            extras = []
 
-        nearest_res = []
-        for r in resistances[:2]:
-            gap = ((r["price"] - current_price) / current_price) * 100
-            nearest_res.append({
-                "name": r["name"],
-                "timeframe": r["timeframe"],
-                "price": round(r["price"], 2),
-                "gap_pct": round(gap, 2)
-            })
+        def _pick_side(side: str):
+            combined = []
+            seen = set()
+            pool = list(levels) + list(extras)
+            for l in pool:
+                ltype = (l.get("type") or "").lower()
+                if ltype and ltype != side:
+                    continue
+                lid = str(l.get("id") or "")
+                if (lid.startswith("TH_") or lid.startswith("TL_") or
+                        (l.get("name") or "") in ("Today's High", "Today's Low")):
+                    if lid not in armed_ids:
+                        continue
+                if not ltype:
+                    if side == "resistance" and l["price"] < current_price:
+                        continue
+                    if side == "support" and l["price"] > current_price:
+                        continue
+                key = round(float(l["price"]), 2)
+                if key in seen:
+                    continue
+                seen.add(key)
+                combined.append(l)
+            if side == "resistance":
+                combined.sort(key=lambda l: l["price"])
+            else:
+                combined.sort(key=lambda l: l["price"], reverse=True)
+            picked = []
+            for l in combined[:DASHBOARD_LEVEL_LIMIT]:
+                if side == "support":
+                    gap = ((current_price - l["price"]) / current_price) * 100
+                else:
+                    gap = ((l["price"] - current_price) / current_price) * 100
+                picked.append({
+                    "name": l["name"],
+                    "timeframe": l["timeframe"],
+                    "price": round(l["price"], 2),
+                    "gap_pct": round(gap, 2)
+                })
+            return picked
 
-        nearest_sup = []
-        for s in supports[:2]:
-            gap = ((current_price - s["price"]) / current_price) * 100
-            nearest_sup.append({
-                "name": s["name"],
-                "timeframe": s["timeframe"],
-                "price": round(s["price"], 2),
-                "gap_pct": round(gap, 2)
-            })
+        nearest_res = _pick_side("resistance")
+        nearest_sup = _pick_side("support")
 
         events_list = []
         events_path = os.path.join("data", "gold_xauusd", "gold_events_log.csv")
@@ -235,6 +293,7 @@ def get_gold_summary_data():
             "coindcx_url": COINDCX_URL,
             "nearest_resistances": nearest_res,
             "nearest_supports": nearest_sup,
+            "session_range": session_range,
             "custom_labels": custom_list,
             "recent_events": events_list,
             "monitor": monitor
@@ -350,11 +409,16 @@ HTML_TEMPLATE = """
             margin-bottom: 20px;
         }
 
-        .price-big {
-            font-size: 30px;
-            font-weight: 700;
-            color: var(--accent-gold);
+        .session-range {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            margin: -8px 0 18px 0;
+            font-size: 13px;
+            color: var(--text-muted);
         }
+        .session-range span { color: var(--text-color); font-weight: 600; }
+        .session-note { color: var(--text-muted); font-weight: 500; font-size: 12px; }
 
         .coindcx-btn {
             display: inline-flex;
@@ -525,17 +589,21 @@ HTML_TEMPLATE = """
                 <div id="spot_time_display" style="font-size: 13px; font-weight: 600; color: var(--text-color); margin-top: 4px;">--:--:--</div>
             </div>
         </div>
+        <div class="session-range" id="session_range_row">
+            <div>Today H: <span id="session_high_display">--</span> <span class="session-note" id="session_high_note"></span></div>
+            <div>Today L: <span id="session_low_display">--</span> <span class="session-note" id="session_low_note"></span></div>
+        </div>
 
         <div class="levels-grid">
             <div class="level-box res">
-                <h4>📈 Immediate Resistances (Above)</h4>
+                <h4>📈 Resistances (up to 5 above)</h4>
                 <div id="res_list">
                     <div style="color: var(--text-muted); font-size: 13px;">Loading levels...</div>
                 </div>
             </div>
 
             <div class="level-box sup">
-                <h4>📉 Immediate Supports (Below)</h4>
+                <h4>📉 Supports (up to 5 below)</h4>
                 <div id="sup_list">
                     <div style="color: var(--text-muted); font-size: 13px;">Loading levels...</div>
                 </div>
@@ -646,7 +714,7 @@ HTML_TEMPLATE = """
                 <input type="number" step="0.05" min="0.01" max="5.0" id="gold_trigger_tol_pct" class="number-input" value="0.20"> <span style="color: var(--text-muted); font-size: 14px;">%</span>
             </div>
         </div>
-        <p class="hint">Sleep: <b>5 min</b> normally. Inside <b>0.50%</b> of a label (no alert) → <b>1 min</b> checks. Inside the trigger distance (default <b>0.20%</b>) → <b>NEAR</b> alert and <b>30s</b> until <b>TOUCH</b>. Pull back past 0.30% → 1 min again; past 0.50% → 5 min. A touched label is cancelled for the rest of the day.</p>
+        <p class="hint">Sleep: <b>5 min</b> normally. Inside <b>0.50%</b> of a label (no alert) → <b>1 min</b> checks. Inside the trigger distance (default <b>0.20%</b>) → <b>NEAR</b> alert and <b>30s</b> until <b>TOUCH</b>. Pull back past 0.30% → 1 min again; past 0.50% → 5 min. A touched label is cancelled for the rest of the day. <b>Today's High</b> is added only after price drops <b>2%</b> from it; <b>Today's Low</b> only after price rallies <b>2%</b> from it. After that they use the same 0.50% / 0.20% / touch watch.</p>
     </div>
 
     <!-- Custom Gold Labels -->
@@ -778,6 +846,21 @@ HTML_TEMPLATE = """
 
             document.getElementById('spot_price_display').innerText = '$' + data.current_price.toLocaleString() + ' USD';
             document.getElementById('spot_time_display').innerText = data.timestamp;
+
+            const sr = data.session_range || {};
+            const arm = sr.arm_pct != null ? sr.arm_pct : 2;
+            if (sr.high != null) {
+                document.getElementById('session_high_display').innerText = '$' + Number(sr.high).toLocaleString();
+                document.getElementById('session_high_note').innerText = sr.high_is_level
+                    ? `(${sr.high_gap_pct}% below — level, session already dropped ${arm}%)`
+                    : `(${sr.high_gap_pct}% below — not a level until ${arm}% drop)`;
+            }
+            if (sr.low != null) {
+                document.getElementById('session_low_display').innerText = '$' + Number(sr.low).toLocaleString();
+                document.getElementById('session_low_note').innerText = sr.low_is_level
+                    ? `(${sr.low_gap_pct}% above — level, session already rallied ${arm}%)`
+                    : `(${sr.low_gap_pct}% above — not a level until ${arm}% rally)`;
+            }
 
             let resHtml = '';
             data.nearest_resistances.forEach((r, idx) => {
