@@ -1,0 +1,42 @@
+data:
+  base_dir: stock/data
+  daily_dir: stock/data/nse_daily
+  eod_tol: 0.001
+  hourly_dir: stock/data/nse_hourly
+  intraday_universe_list: ind_nifty200list.csv
+  overlap_days: 2
+  update_hourly_eod: false
+  update_hourly_intraday: false
+  workers: 8
+event_finder:
+  run_stock_event_finder: true
+  show_stock_events: false
+market:
+  close: '15:30'
+  open: 09:15
+  trading_days_only: true
+  tz_offset_minutes: 330
+moneycontrol_run_times:
+- 08:45
+output:
+  auto_open: false
+  dir: stock/data/screener_output
+  export_dir: C:/DATA/CODE/Stocks/EventFinder/stock/Results
+  notify: true
+  watchlist_prefix:
+  - NSE:NIFTY50-INDEX
+  - BSE:SENSEX-INDEX
+run_times:
+- 09:30
+- '10:30'
+- '11:30'
+- '12:30'
+- '13:30'
+- '14:30'
+- '16:00'
+screener:
+  big_mult: 2.0
+  left: 2
+  right: 3
+  target: 20
+  tol: 0.005

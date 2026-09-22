@@ -55,10 +55,14 @@ htmlcov/
 Thumbs.db
 
 # Project data and outputs
+gold/data/
+gold/tv_data/
+stock/data/
+stock/Results/
+stock/download_log.txt
+utils/logs/
+utils/.env
 data/
-Results/
-scratch/
-download_log.txt
 
 # Misc
 *.egg

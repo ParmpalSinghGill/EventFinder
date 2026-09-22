@@ -1,0 +1,16 @@
+event_finder:
+  run_gold_event_finder: true
+  show_gold_events: true
+  gold_trigger_tol: 0.002
+  watch_exit_dist: 0.004
+  approach_dist: 0.005
+  session_extreme_arm: 0.01
+  near_retrigger_sec: 0
+  monitor_fast_sec: 30
+  monitor_approach_sec: 60
+  monitor_slow_sec: 300
+  prev_day_hierarchy_tol: 0.004
+telegram:
+  enable_telegram: true
+discord:
+  enable_discord: true
