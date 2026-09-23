@@ -16,17 +16,19 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-
-import json
 import os
-import sys
+
+os.chdir(_ROOT)
+_LOG_DIR = _ROOT / "utils" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Safe stdout/stderr fallback for pythonw (windowless python)
 if sys.stdout is None:
-    sys.stdout = open(os.path.join("utils", "logs", "manager.log"), "a", encoding="utf-8")
+    sys.stdout = open(_LOG_DIR / "manager.log", "a", encoding="utf-8")
 if sys.stderr is None:
-    sys.stderr = open(os.path.join("utils", "logs", "manager.log"), "a", encoding="utf-8")
+    sys.stderr = open(_LOG_DIR / "manager.log", "a", encoding="utf-8")
 
+import json
 import time
 import subprocess
 from datetime import datetime

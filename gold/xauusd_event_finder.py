@@ -16,6 +16,7 @@ import yaml
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
 
 from gold.coindcx_gold import (COINDCX_PAIR, drop_weekend_bars, fetch_latest_data as fetch_coindcx_gold,
                                fetch_live_price, is_gold_weekend)

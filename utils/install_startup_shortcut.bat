@@ -1,14 +1,18 @@
 @echo off
 title Install Event Finder Windows Startup Service
-echo Adding Event Finder Background Service to Windows Startup...
+cd /d "%~dp0.."
 
-set "TARGET=C:\DATA\CODE\Stocks\EventFinder\utils\start_event_finders_background.vbs"
-set "SHORTCUT=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\EventFinderBackground.lnk"
+echo Adding Event Finder (dashboard + background loop) to Windows Startup...
 
-powershell -Command "$s=(New-Object -COM WScript.Shell).CreateShortcut('%SHORTCUT%'); $s.TargetPath='%TARGET%'; $s.Save()"
+python utils\install_startup.py
+if errorlevel 1 (
+    echo [ERROR] Could not register or start Event Finder.
+    if /I not "%~1"=="nopause" pause
+    exit /b 1
+)
 
 echo.
-echo [SUCCESS] Event Finder is now registered with Windows Startup!
-echo It will automatically start in the background whenever you turn on your laptop.
+echo [SUCCESS] Event Finder starts at Windows logon.
+echo Dashboard: http://localhost:5050
 echo.
-pause
+if /I not "%~1"=="nopause" pause

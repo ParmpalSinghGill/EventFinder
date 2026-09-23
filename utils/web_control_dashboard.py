@@ -14,19 +14,22 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-
-import json
 import os
-import sys
+
+# Always run from EventFinder so gold/stock/utils relative paths work.
+os.chdir(_ROOT)
+_LOG_DIR = _ROOT / "utils" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Safe stdout/stderr fallback for pythonw (windowless python)
 if sys.stdout is None:
-    sys.stdout = open(os.path.join("utils", "logs", "dashboard.log"), "a", encoding="utf-8")
+    sys.stdout = open(_LOG_DIR / "dashboard.log", "a", encoding="utf-8")
 if sys.stderr is None:
-    sys.stderr = open(os.path.join("utils", "logs", "dashboard.log"), "a", encoding="utf-8")
+    sys.stderr = open(_LOG_DIR / "dashboard.log", "a", encoding="utf-8")
 
 from datetime import datetime
 from flask import Flask, jsonify, render_template_string, request
+import json
 import pandas as pd
 import yaml
 
